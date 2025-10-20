@@ -223,6 +223,13 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 
 // Create a new VM resource.
 func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	// fallback: 10m deadline
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+	}
+
 	// Retrieve values from plan
 	var plan vmResourceModel
 	diags := req.Plan.Get(ctx, &plan)
@@ -262,16 +269,36 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	// Create new vm
 	vm, err := r.client.CreateVm(newVmOrder)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error creating VM",
-			"Could not create VM, unexpected error: "+err.Error(),
-		)
+		resp.Diagnostics.AddError("Error creating VM", "Could not create VM, unexpected error: "+err.Error())
 		return
 	}
 
 	// Map response body to schema and populate Computed attribute values
 	plan.ID = types.StringValue(strconv.Itoa(vm.OrderID))
 	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+
+	// If user did NOT set a static IP, wait for provisioned IP
+	userSetStatic := plan.IsVpcOnly.ValueBool() && !plan.UseDhcp.ValueBool() &&
+		!plan.IpAddress.IsNull() && !plan.IpAddress.IsUnknown() &&
+		plan.IpAddress.ValueString() != ""
+
+	if userSetStatic {
+		// keep what user set; API will apply it
+	} else {
+		if ip, err := r.WaitForIP(ctx, plan.ID.ValueString()); err == nil && ip != "" {
+			plan.IpAddress = types.StringValue(ip)
+		} else {
+			// don’t return Unknown; write a known-null so apply can finish
+			plan.IpAddress = types.StringNull()
+			// optional: warn user that IP wasn’t ready before timeout/cancel
+			if err != nil {
+				resp.Diagnostics.AddWarning(
+					"IP not yet assigned",
+					"The VM was created but no IP was visible before timeout; it will appear on the next refresh.",
+				)
+			}
+		}
+	}
 
 	// Set state to fully populated data
 	diags = resp.State.Set(ctx, plan)
@@ -523,6 +550,32 @@ func (m productPrefixReplaceModifier) PlanModifyString(
 		if (prefixPlan == "VM-A" && prefixState == "VM-B") ||
 			(prefixPlan == "VM-B" && prefixState == "VM-A") {
 			resp.RequiresReplace = true
+		}
+	}
+}
+
+func (r *vmResource) WaitForIP(ctx context.Context, id string) (string, error) {
+	backoff := 300 * time.Millisecond
+	maxBackoff := 5 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
+		vm, err := r.client.GetVm(id)
+		if err == nil && vm.IpAddress != "" {
+			return vm.IpAddress, nil
+		}
+
+		time.Sleep(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 		}
 	}
 }

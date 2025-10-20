@@ -434,12 +434,14 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 	if err != nil {
 		return nil, err
 	}
-	// get VxLAN ID
-	vxlanID, err := getVxlanID(c, vm.Vpc[0])
-	if err != nil {
-		return nil, err
+	var vxlanID string
+	// get VxLAN ID of first VPC
+	if len(vm.Vpc) > 0 {
+		vxlanID, err = getVxlanID(c, vm.Vpc[0])
+		if err != nil {
+			return nil, err
+		}
 	}
-
 	provisioning := NewVmProvisioning{
 		Hostname: vm.Hostname,
 		Os:       osID,
