@@ -296,6 +296,7 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 			SshKey:      orderData.Order.ProvisioningOptions.Provisioning.SshKey,
 			IsVpcOnly:   orderData.Order.ProvisioningOptions.Provisioning.IsVpcOnly,
 			UseDhcp:     orderData.Order.ProvisioningOptions.Provisioning.UseDhcp,
+			RegisterDns: orderData.Order.ProvisioningOptions.Provisioning.RegisterDns,
 			IpAddress:   orderData.Order.ProvisioningData.VmIpAddress,
 			SubnetMask:  orderData.Order.ProvisioningOptions.Provisioning.SubnetMask,
 			Gateway:     orderData.Order.ProvisioningOptions.Provisioning.Gateway,
@@ -405,6 +406,7 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 		SshKey      string `json:"sshkey,omitempty"`
 		IsVpcOnly   bool   `json:"isVpcOnly,omitempty"`
 		UseDhcp     bool   `json:"useDhcp,omitempty"`
+		RegisterDns bool   `json:"registerDns,omitempty"`
 		IpAddress   string `json:"ipaddress,omitempty"`
 		SubnetMask  string `json:"subnetmask,omitempty"`
 		Gateway     string `json:"gateway,omitempty"`
@@ -465,6 +467,9 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 		provisioning.SubnetMask = vm.SubnetMask
 		provisioning.Gateway = vm.Gateway
 		provisioning.DnsServer = vm.DnsServer
+	}
+	if vm.RegisterDns {
+		provisioning.RegisterDns = true
 	}
 
 	newVmOrder := NewVmOrder{

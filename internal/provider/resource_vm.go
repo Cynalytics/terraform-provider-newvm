@@ -47,6 +47,7 @@ type vmResourceModel struct {
 	SshKey      types.String `tfsdk:"ssh_key"`
 	IsVpcOnly   types.Bool   `tfsdk:"is_vpc_only"`
 	UseDhcp     types.Bool   `tfsdk:"use_dhcp"`
+	RegisterDns types.Bool   `tfsdk:"register_dns"`
 	Vpc         types.List   `tfsdk:"vpc"`
 	IpAddress   types.String `tfsdk:"ip_address"`
 	SubnetMask  types.String `tfsdk:"subnet_mask"`
@@ -172,6 +173,15 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"register_dns": schema.BoolAttribute{
+				Description: "Indicates if hostname should be registered in DNS as A/AAAA.",
+				Optional:    true,
+				// Computed:    true,
+				// Default:     booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"vpc": schema.ListAttribute{
 				Description: "List of VPC numbers (VxLANs) attached to the VM.",
 				Optional:    true,
@@ -259,6 +269,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		SshKey:      plan.SshKey.ValueString(),
 		IsVpcOnly:   plan.IsVpcOnly.ValueBool(),
 		UseDhcp:     plan.UseDhcp.ValueBool(),
+		RegisterDns: plan.RegisterDns.ValueBool(),
 		Vpc:         vpcIDs,
 		IpAddress:   plan.IpAddress.ValueString(),
 		SubnetMask:  plan.SubnetMask.ValueString(),
@@ -403,6 +414,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		SshKey:      plan.SshKey.ValueString(),
 		IsVpcOnly:   plan.IsVpcOnly.ValueBool(),
 		UseDhcp:     plan.UseDhcp.ValueBool(),
+		RegisterDns: plan.RegisterDns.ValueBool(),
 		Vpc:         vpcIDs,
 	}
 

@@ -125,17 +125,18 @@ type NewVmPricing struct {
 
 // NewVM provisioning option
 type NewVmProvisioning struct {
-	Hostname   string `json:"hostname,omitempty"`
-	SshKey     string `json:"sshkey,omitempty"`
-	VxlanId    string `json:"vxlanid,omitempty"`
-	Os         string `json:"os,omitempty"`
-	Location   string `json:"vm_locations,omitempty"`
-	IsVpcOnly  bool   `json:"isVpcOnly,omitempty"`
-	UseDhcp    bool   `json:"useDhcp,omitempty"`
-	IpAddress  string `json:"ipaddress,omitempty"`
-	SubnetMask string `json:"subnetmask,omitempty"`
-	Gateway    string `json:"gateway,omitempty"`
-	DnsServer  string `json:"dnsserver,omitempty"`
+	Hostname    string `json:"hostname,omitempty"`
+	SshKey      string `json:"sshkey,omitempty"`
+	VxlanId     string `json:"vxlanid,omitempty"`
+	Os          string `json:"os,omitempty"`
+	Location    string `json:"vm_locations,omitempty"`
+	IsVpcOnly   bool   `json:"isVpcOnly,omitempty"`
+	UseDhcp     bool   `json:"useDhcp,omitempty"`
+	RegisterDns bool   `json:"registerDns,omitempty"`
+	IpAddress   string `json:"ipaddress,omitempty"`
+	SubnetMask  string `json:"subnetmask,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	DnsServer   string `json:"dnsserver,omitempty"`
 }
 
 // NewVM provisioning data
@@ -218,6 +219,7 @@ type Vm struct {
 	SshKey               string  `json:"sshkey,omitempty"`
 	IsVpcOnly            bool    `json:"isVpcOnly,omitempty"`
 	UseDhcp              bool    `json:"useDhcp,omitempty"`
+	RegisterDns          bool    `json:"registerDns,omitempty"`
 	Vpc                  []int32 `json:"vpc,omitempty"`
 	IpAddress            string  `json:"ipaddress,omitempty"`
 	SubnetMask           string  `json:"subnetmask,omitempty"`
