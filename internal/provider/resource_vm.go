@@ -48,7 +48,7 @@ type vmResourceModel struct {
 	IsVpcOnly   types.Bool   `tfsdk:"is_vpc_only"`
 	UseDhcp     types.Bool   `tfsdk:"use_dhcp"`
 	RegisterDns types.Bool   `tfsdk:"register_dns"`
-	Vpc         types.List   `tfsdk:"vpc"`
+	Vpc         types.Set    `tfsdk:"vpc"`
 	IpAddress   types.String `tfsdk:"ip_address"`
 	SubnetMask  types.String `tfsdk:"subnet_mask"`
 	Gateway     types.String `tfsdk:"gateway"`
@@ -182,7 +182,7 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"vpc": schema.ListAttribute{
+			"vpc": schema.SetAttribute{
 				Description: "List of VPC numbers (VxLANs) attached to the VM.",
 				Optional:    true,
 				ElementType: types.Int32Type,
@@ -344,7 +344,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 			return
 		}
 		// vm.Vpc is []int32 coming from API
-		list, diags := types.ListValueFrom(ctx, types.Int32Type, vm.Vpc)
+		set, diags := types.SetValueFrom(ctx, types.Int32Type, vm.Vpc)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
@@ -358,7 +358,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		state.Ram = types.Int64Value(vm.Ram)
 		state.Cores = types.Int64Value(int64(vm.Cores))
 		state.Disk = types.Int64Value(vm.HdSize)
-		state.Vpc = list
+		state.Vpc = set
 		state.IpAddress = types.StringValue(vm.IpAddress)
 		state.Gateway = types.StringValue(vm.Gateway)
 		state.DnsServer = types.StringValue(vm.DnsServer)
@@ -455,7 +455,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 
 	// vm.Vpc is []int32 coming from API
-	list, diags := types.ListValueFrom(ctx, types.Int32Type, vmNew.Vpc)
+	set, diags := types.SetValueFrom(ctx, types.Int32Type, vmNew.Vpc)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -470,7 +470,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	plan.Cores = types.Int64Value(int64(vmNew.Cores))
 	plan.Disk = types.Int64Value(vmNew.HdSize)
 	plan.SshKey = types.StringValue(vmNew.SshKey)
-	plan.Vpc = list
+	plan.Vpc = set
 	plan.IpAddress = types.StringValue(vmNew.IpAddress)
 	plan.Gateway = types.StringValue(vmNew.Gateway)
 	plan.DnsServer = types.StringValue(vmNew.DnsServer)
