@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,10 +12,10 @@ type NewVmLocationsWrapper struct {
 }
 
 // GetLocations - Returns all operating systems
-func (c *Client) GetLocations() ([]Location, error) {
+func (c *Client) GetLocations(ctx context.Context) ([]Location, error) {
 	locations := []Location{}
 	// obtain operating systems
-	reqLocations, err := http.NewRequest("GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/location", c.HostURL), nil)
+	reqLocations, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/location", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}

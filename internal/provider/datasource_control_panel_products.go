@@ -114,7 +114,7 @@ func (d *controlPanelProductsDataSource) Read(ctx context.Context, req datasourc
 		return
 	}
 
-	controlPanelProducts, err := d.client.GetControlPanelProducts()
+	controlPanelProducts, err := d.client.GetControlPanelProducts(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM Control panel products",

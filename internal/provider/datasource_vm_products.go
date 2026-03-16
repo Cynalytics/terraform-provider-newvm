@@ -95,7 +95,7 @@ func (d *vmProductsDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
-	vmProducts, err := d.client.GetVmProducts()
+	vmProducts, err := d.client.GetVmProducts(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM VM products",

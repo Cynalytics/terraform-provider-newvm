@@ -104,7 +104,7 @@ func (d *vpcsDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	vpcs, err1 := d.client.GetVpcs()
+	vpcs, err1 := d.client.GetVpcs(ctx)
 	if err1 != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM VPCs",
@@ -113,7 +113,7 @@ func (d *vpcsDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	vpcMembers, err2 := d.client.GetVpcMembers()
+	vpcMembers, err2 := d.client.GetVpcMembers(ctx)
 	if err2 != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM VPC members",

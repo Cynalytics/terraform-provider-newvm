@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +32,7 @@ type AuthResponse struct {
 }
 
 // NewClient -
-func NewClient(host, username, password *string, totp *string) (*Client, error) {
+func NewClient(ctx context.Context, host, username, password *string, totp *string) (*Client, error) {
 	c := Client{
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
 		// Default NewVM URL
@@ -57,7 +58,7 @@ func NewClient(host, username, password *string, totp *string) (*Client, error) 
 		Totp:     *totp,
 	}
 
-	ar, err := c.Login()
+	ar, err := c.Login(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func NewClient(host, username, password *string, totp *string) (*Client, error) 
 	c.Token = ar.Token
 
 	// make a request to verify token, this updates the roles and privileges
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/token", c.HostURL), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/token", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -100,5 +101,5 @@ func (c *Client) doRequest(req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("status: %d, body: %s", res.StatusCode, body)
 	}
 
-	return body, err
+	return body, nil
 }

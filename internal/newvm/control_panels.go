@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ type NewVmControlPanelWrapper struct {
 }
 
 // GetControlPanelProducts - Returns list of available control panel products (no auth required)
-func (c *Client) GetControlPanelProducts() ([]ControlPanelProduct, error) {
+func (c *Client) GetControlPanelProducts(ctx context.Context) ([]ControlPanelProduct, error) {
 	controlPanelProducts := []ControlPanelProduct{}
 
 	type IntermediateProduct struct {
@@ -30,7 +31,7 @@ func (c *Client) GetControlPanelProducts() ([]ControlPanelProduct, error) {
 	intermediates := []IntermediateProduct{}
 
 	// first we obtain all DirectAdmin products @hardcoded product ID
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/product/CP_DIRECTADMIN", c.HostURL), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/product/CP_DIRECTADMIN", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	} else {
@@ -49,7 +50,7 @@ func (c *Client) GetControlPanelProducts() ([]ControlPanelProduct, error) {
 	}
 
 	// and then we add all Plesk products @hardcoded product ID
-	req, err = http.NewRequest("GET", fmt.Sprintf("%s/account/v1/product/CP_PLESK", c.HostURL), nil)
+	req, err = http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/product/CP_PLESK", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	} else {
@@ -101,11 +102,11 @@ func (c *Client) GetControlPanelProducts() ([]ControlPanelProduct, error) {
 }
 
 // GetControlPanel - Returns specific control panel details
-func (c *Client) GetControlPanel(orderID int64) (*ControlPanel, error) {
+func (c *Client) GetControlPanel(ctx context.Context, orderID int64) (*ControlPanel, error) {
 	if orderID > 0 {
 		// combine data from various API paths
 		// first obtain the order details
-		reqOrder, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
+		reqOrder, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +146,7 @@ func (c *Client) GetControlPanel(orderID int64) (*ControlPanel, error) {
 
 		// merge outstanding change requests with the order details if any
 		if orderData.Order.NeedsChange == 1 {
-			reqChanges, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/changerequest?orderId=%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
+			reqChanges, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/changerequest?orderId=%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
 			if err != nil {
 				return nil, err
 			}
@@ -158,17 +159,19 @@ func (c *Client) GetControlPanel(orderID int64) (*ControlPanel, error) {
 			if err != nil {
 				return nil, err
 			}
-			changeRequest := changesData.Changes[0]
-			newOptions := NewVmPricing{}
-			if err := json.Unmarshal([]byte(changeRequest.NewOptions), &newOptions); err != nil {
-				panic(err)
+			if len(changesData.Changes) > 0 {
+				changeRequest := changesData.Changes[0]
+				newOptions := NewVmPricing{}
+				if err := json.Unmarshal([]byte(changeRequest.NewOptions), &newOptions); err != nil {
+					panic(err)
+				}
 			}
 		}
 
 		// populate the control panel with obtained data values
 		controlPanel := ControlPanel{
 			ID:         orderData.Order.ID,
-			VmID:       orderData.Order.ParentID,
+			VmOrderID:  orderData.Order.ParentID,
 			ProductID:  orderData.Order.ProductID + "." + licenseType,
 			Extensions: extensions,
 		}
@@ -198,7 +201,7 @@ func splitControlPanelProductID(controlPanelProductID string) (string, int) {
 }
 
 // CreateControlPanel - Create new control panel order
-func (c *Client) CreateControlPanel(controlPanel ControlPanel) (*ControlPanel, error) {
+func (c *Client) CreateControlPanel(ctx context.Context, controlPanel ControlPanel) (*ControlPanel, error) {
 	// Order @NewVM Order structure
 	type NewVmOrderOption struct {
 		DirectAdminLicense int `json:"da_license,omitempty"`
@@ -250,7 +253,7 @@ func (c *Client) CreateControlPanel(controlPanel ControlPanel) (*ControlPanel, e
 	newVmOrder := NewVmOrder{
 		Amount:            orderOption,
 		CustomDescription: "",
-		Parent:            strconv.FormatInt(int64(controlPanel.VmID), 10),
+		Parent:            strconv.FormatInt(int64(controlPanel.VmOrderID), 10),
 		//Provisioning:     provisioning,
 		AutoProvision:    true,
 		FinishOrderGroup: true,
@@ -261,7 +264,7 @@ func (c *Client) CreateControlPanel(controlPanel ControlPanel) (*ControlPanel, e
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, productCode), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, productCode), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +288,7 @@ func (c *Client) CreateControlPanel(controlPanel ControlPanel) (*ControlPanel, e
 }
 
 // UpdateControlPanel - Updates an order
-func (c *Client) UpdateControlPanel(orderID int64, controlPanel ControlPanel) (*ControlPanel, error) {
+func (c *Client) UpdateControlPanel(ctx context.Context, orderID int64, controlPanel ControlPanel) (*ControlPanel, error) {
 	// Order @NewVM Change request structure
 	type NewVmChangeOption struct {
 		DirectAdminLicense int `json:"da_license,omitempty"`
@@ -327,7 +330,7 @@ func (c *Client) UpdateControlPanel(orderID int64, controlPanel ControlPanel) (*
 		return nil, err
 	}
 	// change request
-	reqChange, err := http.NewRequest("PUT", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), strings.NewReader(string(rb)))
+	reqChange, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -347,9 +350,9 @@ func (c *Client) UpdateControlPanel(orderID int64, controlPanel ControlPanel) (*
 }
 
 // DeleteControlPanel - Deletes a control panel
-func (c *Client) DeleteControlPanel(orderID int64) error {
+func (c *Client) DeleteControlPanel(ctx context.Context, orderID int64) error {
 	// obtain VM uuid
-	reqOrder, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
+	reqOrder, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, strconv.FormatInt(orderID, 10)), nil)
 	if err != nil {
 		return err
 	}
@@ -385,7 +388,7 @@ func (c *Client) DeleteControlPanel(orderID int64) error {
 	if err != nil {
 		return err
 	}
-	reqOrderEnd, err := http.NewRequest("PUT", fmt.Sprintf("%s/account/v1/order/%s/enddate", c.HostURL, strconv.FormatInt(orderID, 10)), strings.NewReader(string(reqBodyOrderEnd)))
+	reqOrderEnd, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/account/v1/order/%s/enddate", c.HostURL, strconv.FormatInt(orderID, 10)), strings.NewReader(string(reqBodyOrderEnd)))
 	if err != nil {
 		return err
 	}

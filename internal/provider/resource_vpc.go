@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"unithost-terraform/internal/newvm"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -31,12 +31,13 @@ func NewVpcResource() resource.Resource {
 
 // vpcResourceModel maps the resource schema data.
 type vpcResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	Number      types.Int32  `tfsdk:"number"`
-	Name        types.String `tfsdk:"name"`
-	OwnerID     types.Int32  `tfsdk:"owner_id"`
-	Removable   types.Int32  `tfsdk:"removable"`
-	LastUpdated types.String `tfsdk:"last_updated"`
+	ID        types.String `tfsdk:"id"`
+	Number    types.Int32  `tfsdk:"number"`
+	Name      types.String `tfsdk:"name"`
+	OwnerID   types.Int32  `tfsdk:"owner_id"`
+	Removable types.Int32  `tfsdk:"removable"`
+	Metadata  types.Map    `tfsdk:"metadata"`
+	// LastUpdated types.String `tfsdk:"last_updated"`
 }
 
 // vpcResource is the resource implementation.
@@ -89,10 +90,20 @@ func (r *vpcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 					int32planmodifier.UseStateForUnknown(),
 				},
 			},
-			"last_updated": schema.StringAttribute{
-				Description: "Timestamp of the last Terraform update of the VPC.",
-				Computed:    true,
+			"metadata": schema.MapAttribute{
+				Optional:    true,
+				Description: "Terraform-only metadata as a map of key => list of values.",
+				ElementType: types.ListType{
+					ElemType: types.StringType,
+				},
 			},
+			// "last_updated": schema.StringAttribute{
+			// Description: "Timestamp of the last Terraform update of the VPC.",
+			// Computed:    true,
+			// PlanModifiers: []planmodifier.String{
+			// stringplanmodifier.UseStateForUnknown(),
+			// },
+			// },
 		},
 	}
 }
@@ -113,7 +124,7 @@ func (r *vpcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 
 	// Create new VPC
-	vpc, err := r.client.CreateVpc(newVpcOrder)
+	vpc, err := r.client.CreateVpc(ctx, newVpcOrder)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating VPC",
@@ -125,15 +136,21 @@ func (r *vpcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	// Map response body to schema and populate Computed attribute values
 	plan.ID = types.StringValue(vpc.ID)
 	plan.Name = types.StringValue(newVpcOrder.Name)
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
 	// Try to read back
-	if cp, err := r.client.GetVpc(vpc.ID); err == nil {
+	if cp, err := r.client.GetVpc(ctx, vpc.ID); err == nil {
 		plan.Number = types.Int32Value(cp.Number)
 		plan.OwnerID = types.Int32Value(cp.OwnerID)
 		plan.Removable = types.Int32Value(int32(cp.Removable))
 	}
 
+	if plan.Metadata.IsNull() || plan.Metadata.IsUnknown() {
+		plan.Metadata = types.MapValueMust(
+			types.ListType{ElemType: types.StringType},
+			map[string]attr.Value{},
+		)
+	}
 	// Set state to fully populated data
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -158,7 +175,7 @@ func (r *vpcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		log.Println("Reading VPC: ", vpcId)
 
 		// Get refreshed VPC value from NewVM
-		vpc, err := r.client.GetVpc(vpcId)
+		vpc, err := r.client.GetVpc(ctx, vpcId)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Reading VPC",
@@ -204,7 +221,7 @@ func (r *vpcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 
 	// Update existing VPC
-	err := r.client.UpdateVpc(plan.ID.ValueString(), updateVpcOrder)
+	err := r.client.UpdateVpc(ctx, plan.ID.ValueString(), updateVpcOrder)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating NewVM VPC",
@@ -213,7 +230,16 @@ func (r *vpcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	if plan.Metadata.IsUnknown() {
+		plan.Metadata = prior.Metadata
+	}
+
+	if plan.Metadata.IsNull() {
+		plan.Metadata = types.MapValueMust(
+			types.ListType{ElemType: types.StringType},
+			map[string]attr.Value{},
+		)
+	}
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -233,7 +259,7 @@ func (r *vpcResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	vpcID := state.ID.ValueString()
 	if vpcID != "" {
 		// Delete existing VPC
-		err := r.client.DeleteVpc(vpcID)
+		err := r.client.DeleteVpc(ctx, vpcID)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Deleting VPC",

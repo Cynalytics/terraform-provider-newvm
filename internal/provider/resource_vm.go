@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -36,6 +37,8 @@ func NewVmResource() resource.Resource {
 // vmResourceModel maps the resource schema data.
 type vmResourceModel struct {
 	ID          types.String `tfsdk:"id"`
+	OrderID     types.Int64  `tfsdk:"order_id"`
+	Name        types.String `tfsdk:"name"`
 	VmProductID types.String `tfsdk:"product"`
 	Os          types.String `tfsdk:"os"`
 	Hostname    types.String `tfsdk:"hostname"`
@@ -43,7 +46,6 @@ type vmResourceModel struct {
 	Ram         types.Int64  `tfsdk:"ram"`
 	Cores       types.Int64  `tfsdk:"cores"`
 	Disk        types.Int64  `tfsdk:"disk"`
-	Comments    types.String `tfsdk:"comments"`
 	SshKey      types.String `tfsdk:"ssh_key"`
 	IsVpcOnly   types.Bool   `tfsdk:"is_vpc_only"`
 	UseDhcp     types.Bool   `tfsdk:"use_dhcp"`
@@ -53,13 +55,16 @@ type vmResourceModel struct {
 	SubnetMask  types.String `tfsdk:"subnet_mask"`
 	Gateway     types.String `tfsdk:"gateway"`
 	DnsServer   types.String `tfsdk:"dns_server"`
-	LastUpdated types.String `tfsdk:"last_updated"`
+	Metadata    types.Map    `tfsdk:"metadata"`
+	// LastUpdated types.String `tfsdk:"last_updated"`
 }
 
 // vmResource is the resource implementation.
 type vmResource struct {
 	client *newvm.Client
 }
+
+type productPrefixReplaceModifier struct{}
 
 // Metadata returns the resource type name.
 func (r *vmResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -72,7 +77,21 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 		Description: "Manages a VM.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Description: "Numeric identifier of the VM. (order number)",
+				Description: "UUID of the VM",
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"order_id": schema.Int64Attribute{
+				Description: "order number",
+				Computed:    true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"name": schema.StringAttribute{
+				Description: "name of the VM. (eg. 'VM00123')",
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
@@ -137,29 +156,16 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 					PreventDecreaseInt64{Attr: "disk", Unit: "GB"},
 				},
 			},
-			"comments": schema.StringAttribute{
-				Description: "Comments for the VM order.",
-				Optional:    true,
-				Computed:    true,
-				Default:     stringdefault.StaticString(""),
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
-			},
 			"ssh_key": schema.StringAttribute{
-				Description: "SSH key to use for administrator account.",
+				Description: "SSH key to use for administrator account during initial provisioning only.",
 				Optional:    true,
-				Computed:    true,
-				Default:     stringdefault.StaticString(""),
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
+				WriteOnly:   true,
 			},
 			"is_vpc_only": schema.BoolAttribute{
 				Description: "Indicates if VM is only connected to a VPC.",
 				Optional:    true,
-				// Computed:    true,
-				// Default:     booldefault.StaticBool(false),
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
@@ -167,8 +173,8 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 			"use_dhcp": schema.BoolAttribute{
 				Description: "Indicates if VM should use DHCP for obtaining IP data.",
 				Optional:    true,
-				// Computed:    true,
-				// Default:     booldefault.StaticBool(false),
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
@@ -176,8 +182,8 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 			"register_dns": schema.BoolAttribute{
 				Description: "Indicates if hostname should be registered in DNS as A/AAAA.",
 				Optional:    true,
-				// Computed:    true,
-				// Default:     booldefault.StaticBool(false),
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
@@ -191,7 +197,6 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 				Description: "IP address of VM's primary network interface.",
 				Optional:    true,
 				Computed:    true,
-				//Default:     stringdefault.StaticString(""),
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -223,41 +228,52 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"last_updated": schema.StringAttribute{
-				Description: "Timestamp of the last Terraform update of the VM.",
-				Computed:    true,
+			"metadata": schema.MapAttribute{
+				Optional:    true,
+				Description: "Order metadata as a map of key => list of values.",
+				ElementType: types.ListType{
+					ElemType: types.StringType,
+				},
 			},
+			// "last_updated": schema.StringAttribute{
+			// Description: "Timestamp of the last Terraform update of the VM.",
+			// Computed:    true,
+			// PlanModifiers: []planmodifier.String{
+			// stringplanmodifier.UseStateForUnknown(),
+			// },
+			// },
 		},
 	}
 }
 
 // Create a new VM resource.
 func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	// fallback: 10m deadline
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 	}
 
-	// Retrieve values from plan
 	var plan vmResourceModel
-	diags := req.Plan.Get(ctx, &plan)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	var config vmResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	var vpcIDs []int32
 	if !plan.Vpc.IsNull() && !plan.Vpc.IsUnknown() {
-		diags = plan.Vpc.ElementsAs(ctx, &vpcIDs, false)
-		resp.Diagnostics.Append(diags...)
+		resp.Diagnostics.Append(plan.Vpc.ElementsAs(ctx, &vpcIDs, false)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
 	}
 
-	// Generate API request body from plan
 	newVmOrder := newvm.Vm{
 		VmProductID: plan.VmProductID.ValueString(),
 		Os:          plan.Os.ValueString(),
@@ -266,7 +282,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		Ram:         plan.Ram.ValueInt64(),
 		Cores:       int(plan.Cores.ValueInt64()),
 		HdSize:      plan.Disk.ValueInt64(),
-		SshKey:      plan.SshKey.ValueString(),
+		SshKey:      config.SshKey.ValueString(),
 		IsVpcOnly:   plan.IsVpcOnly.ValueBool(),
 		UseDhcp:     plan.UseDhcp.ValueBool(),
 		RegisterDns: plan.RegisterDns.ValueBool(),
@@ -277,31 +293,39 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		DnsServer:   plan.DnsServer.ValueString(),
 	}
 
-	// Create new vm
-	vm, err := r.client.CreateVm(newVmOrder)
+	vm, err := r.client.CreateVm(ctx, newVmOrder)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating VM", "Could not create VM, unexpected error: "+err.Error())
 		return
 	}
 
-	// Map response body to schema and populate Computed attribute values
-	plan.ID = types.StringValue(strconv.Itoa(vm.OrderID))
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	plan.OrderID = types.Int64Value(int64(vm.OrderID))
+	plan.Name = types.StringValue(fmt.Sprintf("VM%05d", int64(vm.OrderID)))
+	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
-	// If user did NOT set a static IP, wait for provisioned IP
+	metadataItems, d := expandOrderMetadata(ctx, plan.Metadata, int(vm.OrderID))
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := r.client.SyncOrderMetaData(ctx, int64(vm.OrderID), metadataItems); err != nil {
+		resp.Diagnostics.AddError(
+			"Error syncing VM metadata",
+			"VM was created, but metadata could not be synced: "+err.Error(),
+		)
+		return
+	}
+
 	userSetStatic := plan.IsVpcOnly.ValueBool() && !plan.UseDhcp.ValueBool() &&
 		!plan.IpAddress.IsNull() && !plan.IpAddress.IsUnknown() &&
 		plan.IpAddress.ValueString() != ""
 
-	if userSetStatic {
-		// keep what user set; API will apply it
-	} else {
-		if ip, err := r.WaitForIP(ctx, plan.ID.ValueString()); err == nil && ip != "" {
+	if !userSetStatic {
+		if ip, err := r.WaitForIP(ctx, plan.OrderID.ValueInt64()); err == nil && ip != "" {
 			plan.IpAddress = types.StringValue(ip)
 		} else {
-			// don’t return Unknown; write a known-null so apply can finish
 			plan.IpAddress = types.StringNull()
-			// optional: warn user that IP wasn’t ready before timeout/cancel
 			if err != nil {
 				resp.Diagnostics.AddWarning(
 					"IP not yet assigned",
@@ -311,71 +335,108 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
-	// Set state to fully populated data
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
+	plan.SshKey = types.StringNull()
+
+	// read back the meta data
+	metaItems, err := r.client.GetOrderMetaData(ctx, int64(vm.OrderID))
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error reading VM metadata",
+			"VM was created, but metadata could not be read back: "+err.Error(),
+		)
+		return
+	}
+
+	plan.Metadata, d = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 }
 
 // Read resource information.
-
 func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	// Get current state
 	var state vmResourceModel
-	diags := req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	vmOrderID := state.OrderID.ValueInt64()
+	if !(vmOrderID > 0) {
+		resp.Diagnostics.AddError(
+			"Error Reading VM",
+			"Could not read VM: no order ID present in state.",
+		)
+		return
+	}
+
+	log.Println("Reading VM:", vmOrderID)
+
+	vm, err := r.client.GetVm(ctx, vmOrderID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Reading VM",
+			"Could not read VM "+strconv.Itoa(int(vmOrderID))+": "+err.Error(),
+		)
+		return
+	}
+
+	set, diags := types.SetValueFrom(ctx, types.Int32Type, vm.Vpc)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	vmId := state.ID.ValueString()
-	if vmId != "" {
-		log.Println("Reading VM: ", vmId)
+	state.ID = types.StringValue(vm.ID)
+	state.OrderID = types.Int64Value(int64(vm.OrderID))
+	state.Name = types.StringValue(vm.VmName)
+	state.VmProductID = types.StringValue(vm.VmProductID)
+	state.Os = types.StringValue(vm.Os)
+	state.Location = types.StringValue(vm.Location)
+	state.Hostname = types.StringValue(vm.Hostname)
+	state.Ram = types.Int64Value(vm.Ram)
+	state.Cores = types.Int64Value(int64(vm.Cores))
+	state.Disk = types.Int64Value(vm.HdSize)
+	state.Vpc = set
+	state.IpAddress = types.StringValue(vm.IpAddress)
+	state.Gateway = types.StringValue(vm.Gateway)
+	state.DnsServer = types.StringValue(vm.DnsServer)
+	state.SubnetMask = types.StringValue(vm.SubnetMask)
+	state.IsVpcOnly = types.BoolValue(vm.IsVpcOnly)
+	state.UseDhcp = types.BoolValue(vm.UseDhcp)
+	state.RegisterDns = types.BoolValue(vm.RegisterDns)
 
-		// Get refreshed vm value from NewVM
-		vm, err := r.client.GetVm(vmId)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Reading VM",
-				"Could not read VM "+vmId+": "+err.Error(),
-			)
-			return
-		}
-		// vm.Vpc is []int32 coming from API
-		set, diags := types.SetValueFrom(ctx, types.Int32Type, vm.Vpc)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			return
-		}
+	state.SshKey = types.StringNull()
 
-		// Overwrite items with refreshed state
-		state.VmProductID = types.StringValue(vm.VmProductID)
-		state.Os = types.StringValue(vm.Os)
-		state.Location = types.StringValue(vm.Location)
-		state.Hostname = types.StringValue(vm.Hostname)
-		state.Ram = types.Int64Value(vm.Ram)
-		state.Cores = types.Int64Value(int64(vm.Cores))
-		state.Disk = types.Int64Value(vm.HdSize)
-		state.Vpc = set
-		state.IpAddress = types.StringValue(vm.IpAddress)
-		state.Gateway = types.StringValue(vm.Gateway)
-		state.DnsServer = types.StringValue(vm.DnsServer)
-		state.SubnetMask = types.StringValue(vm.SubnetMask)
+	metaItems, err := r.client.GetOrderMetaData(ctx, vmOrderID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Reading VM metadata",
+			"Could not read metadata for VM "+strconv.FormatInt(vmOrderID, 10)+": "+err.Error(),
+		)
+		return
+	}
 
-		// Set refreshed state
-		diags = resp.State.Set(ctx, &state)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			log.Printf("Error updating state: %v", resp.Diagnostics.Errors())
-			return
-		}
+	state.Metadata, diags = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		log.Printf("Error updating state: %v", resp.Diagnostics.Errors())
+		return
 	}
 }
 
 func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// Retrieve values from plan
 	var plan vmResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
@@ -383,8 +444,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 
-	// Fetch current VM data from API
-	vmCurrent, err := r.client.GetVm(plan.ID.ValueString())
+	vmCurrent, err := r.client.GetVm(ctx, plan.OrderID.ValueInt64())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Reading NewVM VM",
@@ -402,7 +462,6 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 
-	// Generate API request body from plan
 	vmUpdated := newvm.Vm{
 		VmProductID: plan.VmProductID.ValueString(),
 		Os:          plan.Os.ValueString(),
@@ -411,14 +470,12 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		Ram:         plan.Ram.ValueInt64(),
 		Cores:       int(plan.Cores.ValueInt64()),
 		HdSize:      plan.Disk.ValueInt64(),
-		SshKey:      plan.SshKey.ValueString(),
 		IsVpcOnly:   plan.IsVpcOnly.ValueBool(),
 		UseDhcp:     plan.UseDhcp.ValueBool(),
 		RegisterDns: plan.RegisterDns.ValueBool(),
 		Vpc:         vpcIDs,
 	}
 
-	// Static IPs only when applicable, and only if changed
 	if plan.IsVpcOnly.ValueBool() && !plan.UseDhcp.ValueBool() {
 		if !plan.IpAddress.IsUnknown() && !plan.IpAddress.IsNull() {
 			vmUpdated.IpAddress = plan.IpAddress.ValueString()
@@ -434,8 +491,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 
-	// Update existing VM
-	_, errUpdate := r.client.UpdateVm(plan.ID.ValueString(), vmCurrent, vmUpdated)
+	_, errUpdate := r.client.UpdateVm(ctx, plan.OrderID.ValueInt64(), vmCurrent, vmUpdated)
 	if errUpdate != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating NewVM Vm",
@@ -444,8 +500,21 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 
-	// Fetch updated items from GetVm as UpdateVm items are not populated.
-	vmNew, errGet := r.client.GetVm(plan.ID.ValueString())
+	metadataItems, d := expandOrderMetadata(ctx, plan.Metadata, int(plan.OrderID.ValueInt64()))
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := r.client.SyncOrderMetaData(ctx, plan.OrderID.ValueInt64(), metadataItems); err != nil {
+		resp.Diagnostics.AddError(
+			"Error syncing VM metadata",
+			"Could not sync metadata for VM: "+err.Error(),
+		)
+		return
+	}
+
+	vmNew, errGet := r.client.GetVm(ctx, plan.OrderID.ValueInt64())
 	if errGet != nil {
 		resp.Diagnostics.AddError(
 			"Error Reading NewVM VM",
@@ -454,14 +523,27 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 
-	// vm.Vpc is []int32 coming from API
+	metaItems, err := r.client.GetOrderMetaData(ctx, plan.OrderID.ValueInt64())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error reading VM metadata",
+			"Could not read metadata after update: "+err.Error(),
+		)
+		return
+	}
+
+	plan.Metadata, d = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	set, diags := types.SetValueFrom(ctx, types.Int32Type, vmNew.Vpc)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Update resource state with updated items and timestamp
 	plan.VmProductID = types.StringValue(vmNew.VmProductID)
 	plan.Os = types.StringValue(vmNew.Os)
 	plan.Location = types.StringValue(vmNew.Location)
@@ -469,44 +551,45 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	plan.Ram = types.Int64Value(vmNew.Ram)
 	plan.Cores = types.Int64Value(int64(vmNew.Cores))
 	plan.Disk = types.Int64Value(vmNew.HdSize)
-	plan.SshKey = types.StringValue(vmNew.SshKey)
 	plan.Vpc = set
 	plan.IpAddress = types.StringValue(vmNew.IpAddress)
 	plan.Gateway = types.StringValue(vmNew.Gateway)
 	plan.DnsServer = types.StringValue(vmNew.DnsServer)
 	plan.SubnetMask = types.StringValue(vmNew.SubnetMask)
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	plan.IsVpcOnly = types.BoolValue(vmNew.IsVpcOnly)
+	plan.UseDhcp = types.BoolValue(vmNew.UseDhcp)
+	plan.RegisterDns = types.BoolValue(vmNew.RegisterDns)
+	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
+	plan.SshKey = types.StringNull()
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 }
 
 func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Retrieve values from state
 	var state vmResourceModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	vmID := state.ID.ValueString()
-	if vmID != "" {
-		// Delete existing vm
-		err := r.client.DeleteVm(state.ID.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Deleting VM",
-				"Could not delete VM, unexpected error: "+err.Error(),
-			)
-			return
-		}
-	} else {
+
+	vmOrderID := state.OrderID.ValueInt64()
+	if !(vmOrderID > 0) {
 		resp.Diagnostics.AddError(
 			"Error Deleting VM",
 			"Could not delete VM, no ID given",
+		)
+		return
+	}
+
+	err := r.client.DeleteVm(ctx, vmOrderID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Deleting VM",
+			"Could not delete VM, unexpected error: "+err.Error(),
 		)
 		return
 	}
@@ -514,20 +597,16 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 
 // Configure adds the provider configured client to the resource.
 func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Add a nil check when handling ProviderData because Terraform
-	// sets that data after it calls the ConfigureProvider RPC.
 	if req.ProviderData == nil {
 		return
 	}
 
 	client, ok := req.ProviderData.(*newvm.Client)
-
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
 			fmt.Sprintf("Expected *newvm.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
@@ -535,18 +614,23 @@ func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest,
 }
 
 func (r *vmResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Retrieve import ID and save to id attribute
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
-}
+	orderID, err := strconv.ParseInt(req.ID, 10, 64)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid import ID",
+			fmt.Sprintf("Expected numeric order ID, got %q: %s", req.ID, err),
+		)
+		return
+	}
 
-type productPrefixReplaceModifier struct{}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("order_id"), orderID)...)
+}
 
 func (m productPrefixReplaceModifier) PlanModifyString(
 	ctx context.Context,
 	req planmodifier.StringRequest,
 	resp *planmodifier.StringResponse,
 ) {
-	// Skip if unknown or null
 	if req.PlanValue.IsUnknown() || req.StateValue.IsUnknown() ||
 		req.PlanValue.IsNull() || req.StateValue.IsNull() {
 		return
@@ -566,7 +650,7 @@ func (m productPrefixReplaceModifier) PlanModifyString(
 	}
 }
 
-func (r *vmResource) WaitForIP(ctx context.Context, id string) (string, error) {
+func (r *vmResource) WaitForIP(ctx context.Context, id int64) (string, error) {
 	backoff := 300 * time.Millisecond
 	maxBackoff := 5 * time.Second
 
@@ -577,7 +661,7 @@ func (r *vmResource) WaitForIP(ctx context.Context, id string) (string, error) {
 		default:
 		}
 
-		vm, err := r.client.GetVm(id)
+		vm, err := r.client.GetVm(ctx, id)
 		if err == nil && vm.IpAddress != "" {
 			return vm.IpAddress, nil
 		}
@@ -600,7 +684,7 @@ func (m productPrefixReplaceModifier) MarkdownDescription(_ context.Context) str
 	return m.Description(context.Background())
 }
 
-// Exported function to use in schema
+// RequiresReplaceIfProductPrefixChanges returns the string plan modifier.
 func RequiresReplaceIfProductPrefixChanges() planmodifier.String {
 	return productPrefixReplaceModifier{}
 }

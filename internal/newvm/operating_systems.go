@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,10 +12,10 @@ type NewVmOperatingSystemsWrapper struct {
 }
 
 // GetOperatingSystems - Returns all operating systems
-func (c *Client) GetOperatingSystems() ([]OperatingSystem, error) {
+func (c *Client) GetOperatingSystems(ctx context.Context) ([]OperatingSystem, error) {
 	operatingSystems := []OperatingSystem{}
 	// obtain operating systems
-	reqOs, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/provisioning/os", c.HostURL), nil)
+	reqOs, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/provisioning/os", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}

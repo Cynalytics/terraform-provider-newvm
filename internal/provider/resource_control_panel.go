@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"time"
 
 	"unithost-terraform/internal/newvm"
 
@@ -43,11 +42,12 @@ type controlPanelExtensionResourceModel struct {
 
 // controlPanelResourceModel maps the resource schema data.
 type controlPanelResourceModel struct {
-	ID          types.Int64                          `tfsdk:"id"`
-	ProductID   types.String                         `tfsdk:"product_id"`
-	VmID        types.Int64                          `tfsdk:"vm_id"`
-	Extensions  []controlPanelExtensionResourceModel `tfsdk:"extensions"`
-	LastUpdated types.String                         `tfsdk:"last_updated"`
+	ID         types.Int64                          `tfsdk:"id"`
+	ProductID  types.String                         `tfsdk:"product_id"`
+	VmOrderID  types.Int64                          `tfsdk:"vm_order_id"`
+	Extensions []controlPanelExtensionResourceModel `tfsdk:"extensions"`
+	Metadata   types.Map                            `tfsdk:"metadata"`
+	// LastUpdated types.String                         `tfsdk:"last_updated"`
 }
 
 // controlPanelResource is the resource implementation.
@@ -80,8 +80,8 @@ func (r *controlPanelResource) Schema(_ context.Context, _ resource.SchemaReques
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
-			"vm_id": schema.Int64Attribute{
-				Description: "VM ID of the VM where the control panel is for.",
+			"vm_order_id": schema.Int64Attribute{
+				Description: "order ID of the VM where the control panel is for.",
 				Required:    true,
 				PlanModifiers: []planmodifier.Int64{
 					int64planmodifier.RequiresReplace(),
@@ -124,10 +124,20 @@ func (r *controlPanelResource) Schema(_ context.Context, _ resource.SchemaReques
 					},
 				},
 			},
-			"last_updated": schema.StringAttribute{
-				Description: "Timestamp of the last Terraform update of the control panel.",
-				Computed:    true,
+			"metadata": schema.MapAttribute{
+				Optional:    true,
+				Description: "Order metadata as a map of key => list of values.",
+				ElementType: types.ListType{
+					ElemType: types.StringType,
+				},
 			},
+			// "last_updated": schema.StringAttribute{
+			// Description: "Timestamp of the last Terraform update of the control panel.",
+			// Computed:    true,
+			// PlanModifiers: []planmodifier.String{
+			// stringplanmodifier.UseStateForUnknown(),
+			// },
+			// },
 		},
 	}
 }
@@ -146,7 +156,7 @@ func (r *controlPanelResource) Create(ctx context.Context, req resource.CreateRe
 	newControlPanelOrder := newvm.ControlPanel{
 		ID:         int(plan.ID.ValueInt64()),
 		ProductID:  plan.ProductID.ValueString(),
-		VmID:       int(plan.VmID.ValueInt64()),
+		VmOrderID:  int(plan.VmOrderID.ValueInt64()),
 		Extensions: []newvm.ControlPanelExtension{},
 	}
 	for _, extension := range plan.Extensions {
@@ -158,7 +168,7 @@ func (r *controlPanelResource) Create(ctx context.Context, req resource.CreateRe
 	}
 
 	// Create new control panel
-	controlPanel, err := r.client.CreateControlPanel(newControlPanelOrder)
+	controlPanel, err := r.client.CreateControlPanel(ctx, newControlPanelOrder)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating control panel",
@@ -169,26 +179,49 @@ func (r *controlPanelResource) Create(ctx context.Context, req resource.CreateRe
 
 	// Map response body to schema and populate Computed attribute values
 	plan.ID = types.Int64Value(int64(controlPanel.ID))
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
-	// Try to read back; if API not ready, union preserves planned items
-	if cp, err := r.client.GetControlPanel(int64(controlPanel.ID)); err == nil {
+	metadataItems, d := expandOrderMetadata(ctx, plan.Metadata, int(controlPanel.ID))
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := r.client.SyncOrderMetaData(ctx, int64(controlPanel.ID), metadataItems); err != nil {
+		resp.Diagnostics.AddError("Error syncing control panel metadata", "Control panel was created, but metadata could not be synced: "+err.Error())
+		return
+	}
+
+	cp, err := r.client.GetControlPanel(ctx, int64(controlPanel.ID))
+	if err == nil {
 		plan.Extensions = mergeExtensionsByID(plan.Extensions, cp.Extensions)
+		plan.VmOrderID = types.Int64Value(int64(cp.VmOrderID))
+		plan.ProductID = types.StringValue(cp.ProductID)
 	} else {
 		// normalize unknowns so no unknowns remain after apply
 		plan.Extensions = mergeExtensionsByID(plan.Extensions, nil)
 	}
 
-	// Set state to fully populated data
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
+	metaItems, err := r.client.GetOrderMetaData(ctx, int64(controlPanel.ID))
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error reading control panel metadata",
+			"Control panel was created, but metadata could not be read back: "+err.Error(),
+		)
+		return
+	}
+
+	plan.Metadata, d = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	diags = resp.State.Set(ctx, plan)
+	resp.Diagnostics.Append(diags...)
 }
 
 // Read resource information.
-
 func (r *controlPanelResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	// Get current state
 	var state controlPanelResourceModel
@@ -198,35 +231,49 @@ func (r *controlPanelResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	controlPanelId := state.ID.ValueInt64()
-	if controlPanelId > 0 {
-		log.Println("Reading control panel: ", controlPanelId)
+	controlPanelID := state.ID.ValueInt64()
+	if controlPanelID <= 0 {
+		return
+	}
 
-		// Get refreshed control panel value from NewVM
-		controlPanel, err := r.client.GetControlPanel(controlPanelId)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Reading control panel",
-				"Could not read control panel "+strconv.FormatInt(controlPanelId, 10)+": "+err.Error(),
-			)
-			return
-		}
+	log.Println("Reading control panel: ", controlPanelID)
 
-		// Overwrite items with refreshed state
-		state.VmID = types.Int64Value(int64(controlPanel.VmID))
-		state.ProductID = types.StringValue(controlPanel.ProductID)
-		// Merge API into current state; if API omits an extension briefly,
-		// the union keeps it instead of dropping it and causing thrash.
-		state.Extensions = mergeExtensionsByID(state.Extensions, controlPanel.Extensions)
+	controlPanel, err := r.client.GetControlPanel(ctx, controlPanelID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Reading control panel",
+			"Could not read control panel "+strconv.FormatInt(controlPanelID, 10)+": "+err.Error(),
+		)
+		return
+	}
 
-		// Set refreshed state
-		diags = resp.State.Set(ctx, &state)
-		resp.Diagnostics.Append(diags...)
-		if resp.Diagnostics.HasError() {
-			log.Printf("Error updating state: %v", resp.Diagnostics.Errors())
-			return
-		}
-	} else {
+	// Overwrite items with refreshed state
+	state.VmOrderID = types.Int64Value(int64(controlPanel.VmOrderID))
+	state.ProductID = types.StringValue(controlPanel.ProductID)
+	// Merge API into current state; if API omits an extension briefly,
+	// the union keeps it instead of dropping it and causing thrash.
+	state.Extensions = mergeExtensionsByID(state.Extensions, controlPanel.Extensions)
+
+	metaItems, err := r.client.GetOrderMetaData(ctx, controlPanelID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Reading control panel metadata",
+			"Could not read metadata for control panel "+strconv.FormatInt(controlPanelID, 10)+": "+err.Error(),
+		)
+		return
+	}
+
+	state.Metadata, diags = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		log.Printf("Error updating state: %v", resp.Diagnostics.Errors())
+		return
+	}
+
+	diags = resp.State.Set(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		log.Printf("Error updating state: %v", resp.Diagnostics.Errors())
 		return
 	}
 }
@@ -234,11 +281,8 @@ func (r *controlPanelResource) Read(ctx context.Context, req resource.ReadReques
 func (r *controlPanelResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// Retrieve values from plan
 	var plan controlPanelResourceModel
-	var prior controlPanelResourceModel
 
 	diags := req.Plan.Get(ctx, &plan)
-	resp.Diagnostics.Append(diags...)
-	diags = req.State.Get(ctx, &prior)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -247,7 +291,7 @@ func (r *controlPanelResource) Update(ctx context.Context, req resource.UpdateRe
 	// Generate API request body from plan
 	newControlPanelOrder := newvm.ControlPanel{
 		ProductID:  plan.ProductID.ValueString(),
-		VmID:       int(plan.VmID.ValueInt64()),
+		VmOrderID:  int(plan.VmOrderID.ValueInt64()),
 		Extensions: []newvm.ControlPanelExtension{},
 	}
 	for _, extension := range plan.Extensions {
@@ -259,7 +303,7 @@ func (r *controlPanelResource) Update(ctx context.Context, req resource.UpdateRe
 	}
 
 	// Update existing control panel
-	_, err := r.client.UpdateControlPanel(plan.ID.ValueInt64(), newControlPanelOrder)
+	_, err := r.client.UpdateControlPanel(ctx, plan.ID.ValueInt64(), newControlPanelOrder)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating NewVM control panel",
@@ -268,22 +312,48 @@ func (r *controlPanelResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
-	cp, err := r.client.GetControlPanel(plan.ID.ValueInt64())
+	metadataItems, d := expandOrderMetadata(ctx, plan.Metadata, int(plan.ID.ValueInt64()))
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if err := r.client.SyncOrderMetaData(ctx, plan.ID.ValueInt64(), metadataItems); err != nil {
+		resp.Diagnostics.AddError(
+			"Error syncing control panel metadata",
+			"Could not sync metadata for control panel: "+err.Error(),
+		)
+		return
+	}
+
+	cp, err := r.client.GetControlPanel(ctx, plan.ID.ValueInt64())
 	if err != nil {
 		// fallback: keep plan (normalized) so elements don't "vanish"
 		plan.Extensions = mergeExtensionsByID(plan.Extensions, nil)
 	} else {
 		plan.Extensions = mergeExtensionsByID(plan.Extensions, cp.Extensions)
-		plan.VmID = types.Int64Value(int64(cp.VmID))
+		plan.VmOrderID = types.Int64Value(int64(cp.VmOrderID))
 		plan.ProductID = types.StringValue(cp.ProductID)
 	}
-	plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
+	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
+	metaItems, err := r.client.GetOrderMetaData(ctx, plan.ID.ValueInt64())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error reading control panel metadata",
+			"Could not read metadata after update: "+err.Error(),
+		)
+		return
+	}
+
+	plan.Metadata, d = flattenOrderMetadata(ctx, metaItems)
+	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	diags = resp.State.Set(ctx, plan)
+	resp.Diagnostics.Append(diags...)
 }
 
 func (r *controlPanelResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -295,20 +365,19 @@ func (r *controlPanelResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 	controlPanelID := state.ID.ValueInt64()
-	if controlPanelID > 0 {
-		// Delete existing control panel
-		err := r.client.DeleteControlPanel(controlPanelID)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Deleting control panel",
-				"Could not delete control panel, unexpected error: "+err.Error(),
-			)
-			return
-		}
-	} else {
+	if controlPanelID <= 0 {
 		resp.Diagnostics.AddError(
 			"Error Deleting control panel",
 			"Could not delete control panel, no ID given",
+		)
+		return
+	}
+
+	err := r.client.DeleteControlPanel(ctx, controlPanelID)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Deleting control panel",
+			"Could not delete control panel, unexpected error: "+err.Error(),
 		)
 		return
 	}
@@ -337,8 +406,16 @@ func (r *controlPanelResource) Configure(_ context.Context, req resource.Configu
 }
 
 func (r *controlPanelResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// Retrieve import ID and save to id attribute
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	id, err := strconv.ParseInt(req.ID, 10, 64)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid import ID",
+			fmt.Sprintf("Expected numeric control panel ID, got %q: %s", req.ID, err),
+		)
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 }
 
 // mergeExtensionsByID returns a stable union of plan and api by extension ID.

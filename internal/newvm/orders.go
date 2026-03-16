@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +12,8 @@ import (
 )
 
 // GetAllOrders - Returns all user's order
-func (c *Client) GetAllOrders() (*[]Order, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/orders", c.HostURL), nil)
+func (c *Client) GetAllOrders(ctx context.Context) (*[]Order, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/orders", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -32,8 +33,8 @@ func (c *Client) GetAllOrders() (*[]Order, error) {
 }
 
 // GetOrder - Returns a specifc order
-func (c *Client) GetOrder(orderID string) (*Order, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, orderID), nil)
+func (c *Client) GetOrder(ctx context.Context, orderID string) (*Order, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, orderID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +64,7 @@ func RandomString(n int) string {
 }
 
 // CreateOrder - Create new orr
-func (c *Client) CreateOrder(orderItems []OrderItem, comments string) (*Order, error) {
+func (c *Client) CreateOrder(ctx context.Context, orderItems []OrderItem, comments string) (*Order, error) {
 	// Order @NewVM Order structure
 	type NewVmOrderOption struct {
 		VmCore      int `json:"vm_core,omitempty"`
@@ -127,7 +128,7 @@ func (c *Client) CreateOrder(orderItems []OrderItem, comments string) (*Order, e
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/account/v1/customer/self/order", c.HostURL), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/account/v1/customer/self/order", c.HostURL), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -147,13 +148,13 @@ func (c *Client) CreateOrder(orderItems []OrderItem, comments string) (*Order, e
 }
 
 // UpdateOrder - Updates an order
-func (c *Client) UpdateOrder(orderID string, orderItems []OrderItem) (*Order, error) {
+func (c *Client) UpdateOrder(ctx context.Context, orderID string, orderItems []OrderItem) (*Order, error) {
 	rb, err := json.Marshal(orderItems)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/orders/%s", c.HostURL, orderID), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/orders/%s", c.HostURL, orderID), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -173,8 +174,8 @@ func (c *Client) UpdateOrder(orderID string, orderItems []OrderItem) (*Order, er
 }
 
 // DeleteOrder - Deletes an order
-func (c *Client) DeleteOrder(orderID string) error {
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/orders/%s", c.HostURL, orderID), nil)
+func (c *Client) DeleteOrder(ctx context.Context, orderID string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("%s/orders/%s", c.HostURL, orderID), nil)
 	if err != nil {
 		return err
 	}
@@ -189,4 +190,28 @@ func (c *Client) DeleteOrder(orderID string) error {
 	}
 
 	return nil
+}
+
+func (c *Client) GetOrderMeta(ctx context.Context, orderID int) ([]NewVmOrderMetaData, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/customer/self/order/%d/meta", c.HostURL, orderID), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var meta []NewVmOrderMetaData
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, err
+	}
+
+	// Optioneel: zorg dat je nooit nil teruggeeft (handig voor Terraform diffs)
+	if meta == nil {
+		meta = []NewVmOrderMetaData{}
+	}
+
+	return meta, nil
 }

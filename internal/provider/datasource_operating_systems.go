@@ -91,7 +91,7 @@ func (d *operatingSystemsDataSource) Read(ctx context.Context, req datasource.Re
 		return
 	}
 
-	operatingSystems, err := d.client.GetOperatingSystems()
+	operatingSystems, err := d.client.GetOperatingSystems(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM operating systems",

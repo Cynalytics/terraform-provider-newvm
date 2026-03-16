@@ -193,7 +193,7 @@ func (p *newvmProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	tflog.Debug(ctx, "Creating NewVM client")
 
 	// Create a new NewVM client using the configuration values
-	client, err := newvm.NewClient(&host, &username, &password, &totp)
+	client, err := newvm.NewClient(ctx, &host, &username, &password, &totp)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to Create NewVM API Client",

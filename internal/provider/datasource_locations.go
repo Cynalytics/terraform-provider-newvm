@@ -88,7 +88,7 @@ func (d *locationsDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	locations, err := d.client.GetLocations()
+	locations, err := d.client.GetLocations(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read NewVM locations",

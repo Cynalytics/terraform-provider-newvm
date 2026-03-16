@@ -3,8 +3,8 @@ package newvm
 // Control Panel
 type ControlPanel struct {
 	ID         int                     `json:"order_id,omitempty"`
-	VmID       int                     `json:"vm_id,omitempty"`
-	ProductID  string                  `json:"product,omitempty"` /* eg. CP_PLESK.plesk_12_license.1 */
+	VmOrderID  int                     `json:"vm_order_id,omitempty"` /* VM order ID */
+	ProductID  string                  `json:"product,omitempty"`     /* eg. CP_PLESK.plesk_12_license.1 */
 	Extensions []ControlPanelExtension `json:"extensions,omitempty"`
 }
 
@@ -109,6 +109,16 @@ type NewVmOrder struct {
 	ProvisioningData    NewVmProvisioningData    `json:"prov_data"`
 	BilledUntil         string                   `json:"billed_until,omitempty"`
 	NeedsChange         int                      `json:"needs_change,omitempty"`
+	MetaData            []NewVmOrderMetaData     `json:"-"`
+}
+
+// NewVM order meta data
+type NewVmOrderMetaData struct {
+	ID         string `json:"id,omitempty"`
+	OrderID    int    `json:"orderId,omitempty"`
+	DataType   string `json:"dataType"`
+	Data       string `json:"data"`
+	Changeable *bool  `json:"changeable,omitempty"`
 }
 
 type NewVmOrderWrapper struct {
@@ -201,15 +211,15 @@ type Product struct {
 // VM
 type Vm struct {
 	ID                   string  `json:"id"`
-	OrderID              int     `json:"order_id,omitempty"`
+	OrderID              int     `json:"orderId,omitempty"` /* was: order_id */
 	VmProductID          string  `json:"product,omitempty"` /* eg. VM-A2 or VM-B5 */
 	Os                   string  `json:"os,omitempty"`
 	Hostname             string  `json:"hostname,omitempty"`
-	Status               string  `json:"status"`
-	VmName               string  `json:"vmname"`
+	Status               string  `json:"state"` /* was: status */
+	VmName               string  `json:"name"`  /* was: vmname */
 	Location             string  `json:"location,omitempty"`
-	Ram                  int64   `json:"ram"`
-	Reserved             int64   `json:"reserved"`
+	Ram                  int64   `json:"memoryUsage"` /* was: ram */
+	Reserved             int64   `json:"memory"`      /* was: reserved */
 	Cores                int     `json:"cores"`
 	HdSize               int64   `json:"hdsize"`
 	BiosGuid             string  `json:"biosGuid,omitempty"`

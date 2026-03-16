@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +18,10 @@ type NewVmVpcMembersWrapper struct {
 }
 
 // GetVpcs - Returns all VPCs
-func (c *Client) GetVpcs() ([]Vpc, error) {
+func (c *Client) GetVpcs(ctx context.Context) ([]Vpc, error) {
 	vpcs := []Vpc{}
 	// obtain VPCs
-	reqVpcs, err := http.NewRequest("GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan", c.HostURL), nil)
+	reqVpcs, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +51,10 @@ func (c *Client) GetVpcs() ([]Vpc, error) {
 }
 
 // GetVpcMembers - Returns all VPC members
-func (c *Client) GetVpcMembers() ([]VpcMember, error) {
+func (c *Client) GetVpcMembers(ctx context.Context) ([]VpcMember, error) {
 	vpcMembers := []VpcMember{}
 	// obtain VPC members
-	reqVpcs, err := http.NewRequest("GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/member", c.HostURL), nil)
+	reqVpcs, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/member", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,7 @@ func (c *Client) GetVpcMembers() ([]VpcMember, error) {
 }
 
 // GetVpc - Returns specific VPC details
-func (c *Client) GetVpc(ID string) (*Vpc, error) {
+func (c *Client) GetVpc(ctx context.Context, ID string) (*Vpc, error) {
 	type NewVmVpcWrapper struct {
 		Vpc Vpc `json:"vxlan"`
 	}
@@ -91,7 +92,7 @@ func (c *Client) GetVpc(ID string) (*Vpc, error) {
 	vpc := Vpc{}
 	if ID != "" {
 		// obtain all VPCs
-		reqVpc, err := http.NewRequest("GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), nil)
+		reqVpc, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +114,7 @@ func (c *Client) GetVpc(ID string) (*Vpc, error) {
 }
 
 // CreateVpc - Create new VPC order
-func (c *Client) CreateVpc(vpc Vpc) (*Vpc, error) {
+func (c *Client) CreateVpc(ctx context.Context, vpc Vpc) (*Vpc, error) {
 	// Order @NewVPC Order structure
 	type NewVpcOrder struct {
 		Name string `json:"label"`
@@ -128,7 +129,7 @@ func (c *Client) CreateVpc(vpc Vpc) (*Vpc, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan", c.HostURL), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan", c.HostURL), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ func (c *Client) CreateVpc(vpc Vpc) (*Vpc, error) {
 }
 
 // UpdateVpc - Update an existing VPC
-func (c *Client) UpdateVpc(ID string, vpc Vpc) error {
+func (c *Client) UpdateVpc(ctx context.Context, ID string, vpc Vpc) error {
 	type UpdateVpcOrder struct {
 		Name string `json:"label"`
 	}
@@ -166,7 +167,7 @@ func (c *Client) UpdateVpc(ID string, vpc Vpc) error {
 		return err
 	}
 
-	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), strings.NewReader(string(rb)))
 	if err != nil {
 		return err
 	}
@@ -185,8 +186,8 @@ func (c *Client) UpdateVpc(ID string, vpc Vpc) error {
 }
 
 // DeleteVpc - Deletes a VPC
-func (c *Client) DeleteVpc(ID string) error {
-	reqOrderEnd, err := http.NewRequest("DELETE", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), nil)
+func (c *Client) DeleteVpc(ctx context.Context, ID string) error {
+	reqOrderEnd, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s", c.HostURL, ID), nil)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ type NewVmVmWrapper struct {
 }
 
 // GetVms - Returns list of available VM products (no auth required)
-func (c *Client) GetVmProducts() ([]VmProduct, error) {
+func (c *Client) GetVmProducts(ctx context.Context) ([]VmProduct, error) {
 	vmProducts := []VmProduct{}
 
 	type IntermediateProduct struct {
@@ -38,7 +39,7 @@ func (c *Client) GetVmProducts() ([]VmProduct, error) {
 	intermediates := []IntermediateProduct{}
 
 	// first we obtain all 'VM-A' products @hardcoded product ID
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/product/VM-A", c.HostURL), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/product/VM-A", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	} else {
@@ -57,7 +58,7 @@ func (c *Client) GetVmProducts() ([]VmProduct, error) {
 	}
 
 	// and then we add all Vm-B products @hardcoded product ID
-	req, err = http.NewRequest("GET", fmt.Sprintf("%s/account/v1/product/VM-B", c.HostURL), nil)
+	req, err = http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/product/VM-B", c.HostURL), nil)
 	if err != nil {
 		return nil, err
 	} else {
@@ -138,11 +139,11 @@ func (c *Client) GetVmProducts() ([]VmProduct, error) {
 }
 
 // GetVm - Returns specific vm details
-func (c *Client) GetVm(orderID string) (*Vm, error) {
-	if orderID != "" {
+func (c *Client) GetVm(ctx context.Context, orderID int64) (*Vm, error) {
+	if orderID > 0 {
 		// combine data from various API paths
 		// first obtain the order details
-		reqOrder, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, orderID), nil)
+		reqOrder, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/%d", c.HostURL, orderID), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -155,6 +156,22 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 		if err != nil {
 			return nil, err
 		}
+		/*
+		   // then obtain any meta data
+		   reqOrderMetaData, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/customer/self/order/%s/meta", c.HostURL, orderID), nil)
+		   if err != nil {
+		       return nil, err
+		   }
+		   bodyOrderMetaData, err := c.doRequest(reqOrderMetaData)
+		   if err != nil {
+		       return nil, err
+		   }
+		   orderMetaData := NewVmOrderWrapper{}
+		   err = json.Unmarshal(bodyOrderMetaData, &orderData)
+		   if err != nil {
+		       return nil, err
+		           }
+		*/
 
 		vmType := ""
 		vmRam := 0
@@ -175,7 +192,7 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 
 		// merge outstanding change requests with the order details if any
 		if orderData.Order.NeedsChange == 1 {
-			reqChanges, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/changerequest?orderId=%s", c.HostURL, orderID), nil)
+			reqChanges, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/changerequest?orderId=%d", c.HostURL, orderID), nil)
 			if err != nil {
 				return nil, err
 			}
@@ -239,7 +256,7 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 		operatingSystem := ""
 		if orderData.Order.ProvisioningOptions.Provisioning.Os != "" {
 			// obtain operating systems
-			operatingSystems, err := c.GetOperatingSystems()
+			operatingSystems, err := c.GetOperatingSystems(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -255,7 +272,7 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 		locationCode := ""
 		if orderData.Order.ProvisioningOptions.Provisioning.Location != "" {
 			// obtain locations
-			locations, err := c.GetLocations()
+			locations, err := c.GetLocations(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -271,7 +288,7 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 		var vpcNumbers []int32
 		// obtain all VPC members and see if our order is in there
 		// @todo support for multiple VPCs
-		vpcMembers, err := c.GetVpcMembers()
+		vpcMembers, err := c.GetVpcMembers(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -286,14 +303,14 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 		vm := Vm{
 			ID:          orderData.Order.ProvisioningData.VmUuid,
 			OrderID:     orderData.Order.ID,
-			VmProductID: orderData.Order.ProductID + vmType, // eg. 'VM-A' + '2' becomes 'VM-A2'
+			VmProductID: orderData.Order.ProductID + vmType,        // eg. 'VM-A' + '2' becomes 'VM-A2'
+			VmName:      fmt.Sprintf("VM%05d", orderData.Order.ID), // make VMxxxxx based on order number
 			Hostname:    orderData.Order.ProvisioningOptions.Provisioning.Hostname,
 			Os:          operatingSystem,
 			Location:    locationCode,
 			Ram:         int64(vmRam),    //orderData.Order.ProvisioningOptions.Pricing.Ram,
 			Cores:       vmCores,         //int(orderData.Order.ProvisioningOptions.Pricing.Cores),
 			HdSize:      int64(vmHdSize), //orderData.Order.ProvisioningOptions.Pricing.HdSize,
-			SshKey:      orderData.Order.ProvisioningOptions.Provisioning.SshKey,
 			IsVpcOnly:   orderData.Order.ProvisioningOptions.Provisioning.IsVpcOnly,
 			UseDhcp:     orderData.Order.ProvisioningOptions.Provisioning.UseDhcp,
 			RegisterDns: orderData.Order.ProvisioningOptions.Provisioning.RegisterDns,
@@ -303,10 +320,10 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 			DnsServer:   orderData.Order.ProvisioningOptions.Provisioning.DnsServer,
 			Vpc:         vpcNumbers,
 		}
-		err = json.Unmarshal(bodyOrder, &vm)
-		if err != nil {
-			return nil, err
-		}
+		// err = json.Unmarshal(bodyOrder, &vm)
+		// if err != nil {
+		// return nil, err
+		// }
 		log.Printf("VM: %+v\n", vm)
 
 		return &vm, nil
@@ -316,12 +333,12 @@ func (c *Client) GetVm(orderID string) (*Vm, error) {
 	}
 }
 
-func getOperatingSystemID(c *Client, osTag string) (string, error) {
+func getOperatingSystemID(ctx context.Context, c *Client, osTag string) (string, error) {
 	log.Printf("Looking up operating system ID for tag '%s'", osTag)
 	operatingSystemID := ""
 	if osTag != "" {
 		// obtain operating systems
-		operatingSystems, err := c.GetOperatingSystems()
+		operatingSystems, err := c.GetOperatingSystems(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -337,11 +354,11 @@ func getOperatingSystemID(c *Client, osTag string) (string, error) {
 	return operatingSystemID, nil
 }
 
-func getLocationID(c *Client, locationCode string) (string, error) {
+func getLocationID(ctx context.Context, c *Client, locationCode string) (string, error) {
 	log.Printf("Looking up location ID for code '%s'", locationCode)
 	locationID := ""
 	if locationCode != "" {
-		locations, err := c.GetLocations()
+		locations, err := c.GetLocations(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -357,11 +374,11 @@ func getLocationID(c *Client, locationCode string) (string, error) {
 	return locationID, nil
 }
 
-func getVxlanID(c *Client, vpcNumber int32) (string, error) {
+func getVxlanID(ctx context.Context, c *Client, vpcNumber int32) (string, error) {
 	log.Printf("Looking up VxLAN ID for number '%d'", vpcNumber)
 	vxlanID := ""
 	if vpcNumber > 0 {
-		vxlans, err := c.GetVpcs()
+		vxlans, err := c.GetVpcs(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -390,7 +407,7 @@ func splitVmProductID(vmProductID string) (string, int, error) {
 }
 
 // CreateVm - Create new vm order
-func (c *Client) CreateVm(vm Vm) (*Vm, error) {
+func (c *Client) CreateVm(ctx context.Context, vm Vm) (*Vm, error) {
 	// Order @NewVM Order structure
 	type NewVmOrderOption struct {
 		VmCore      int `json:"vm_core,omitempty"`
@@ -427,19 +444,19 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 		panic(err) // ... handle error
 	}
 	// get operating system ID
-	osID, err := getOperatingSystemID(c, vm.Os)
+	osID, err := getOperatingSystemID(ctx, c, vm.Os)
 	if err != nil {
 		return nil, err
 	}
 	// get location ID
-	locationID, err := getLocationID(c, vm.Location)
+	locationID, err := getLocationID(ctx, c, vm.Location)
 	if err != nil {
 		return nil, err
 	}
 	var vxlanID string
 	// get VxLAN ID of first VPC
 	if len(vm.Vpc) > 0 {
-		vxlanID, err = getVxlanID(c, vm.Vpc[0])
+		vxlanID, err = getVxlanID(ctx, c, vm.Vpc[0])
 		if err != nil {
 			return nil, err
 		}
@@ -491,7 +508,7 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, productCode), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/account/v1/customer/self/order/%s", c.HostURL, productCode), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +532,7 @@ func (c *Client) CreateVm(vm Vm) (*Vm, error) {
 }
 
 // UpdateVm - Updates an order
-func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
+func (c *Client) UpdateVm(ctx context.Context, orderID int64, vmOld *Vm, vmNew Vm) (*Vm, error) {
 	// Order @NewVM Change request structure
 	type NewVmChangeOption struct {
 		VmCore      int `json:"vm_core"`
@@ -580,7 +597,7 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 			return nil, err
 		}
 		// change request
-		reqChange, err := http.NewRequest("PUT", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, orderID), strings.NewReader(string(rb)))
+		reqChange, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/account/v1/order/%d", c.HostURL, orderID), strings.NewReader(string(rb)))
 		if err != nil {
 			return nil, err
 		}
@@ -599,7 +616,7 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 	// check if VPCs have changed
 	if !sameSetInt32(vmOld.Vpc, vmNew.Vpc) {
 		type VpcMemberRequest struct {
-			OrderID int32 `json:"orderid"`
+			OrderID int64 `json:"orderid"`
 		}
 		type VpcMemberAddedResponse struct {
 			VpcMemberUUID string `json:"id"`
@@ -609,7 +626,7 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 		}
 
 		// obtain all VPCs and index them by ID
-		vpcList, errVpcList := c.GetVpcs()
+		vpcList, errVpcList := c.GetVpcs(ctx)
 		if errVpcList != nil {
 			tmpVm := Vm{}
 			return &tmpVm, errVpcList
@@ -640,19 +657,14 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 				// kept, do nothing at all
 			} else {
 				// add new VPC member
-				oid, err := strconv.ParseInt(orderID, 10, 32)
-				if err != nil {
-					fmt.Println("Conversion error:", err)
-					return nil, err
-				}
 				vpcMemberOrder := VpcMemberRequest{
-					OrderID: int32(oid),
+					OrderID: orderID,
 				}
 				rb, err := json.Marshal(vpcMemberOrder)
 				if err != nil {
 					return nil, err
 				}
-				reqVpcMember, err := http.NewRequest("POST", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s/members", c.HostURL, vpcsByNumber[v].ID), strings.NewReader(string(rb)))
+				reqVpcMember, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s/members", c.HostURL, vpcsByNumber[v].ID), strings.NewReader(string(rb)))
 				if err != nil {
 					return nil, err
 				}
@@ -673,19 +685,14 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 		for _, v := range vmOld.Vpc {
 			if _, ok := newSet[v]; !ok {
 				// remove VPC member
-				oid, err := strconv.ParseInt(orderID, 10, 32)
-				if err != nil {
-					fmt.Println("Conversion error:", err)
-					return nil, err
-				}
 				vpcMemberOrder := VpcMemberRequest{
-					OrderID: int32(oid),
+					OrderID: orderID,
 				}
 				rb, err := json.Marshal(vpcMemberOrder)
 				if err != nil {
 					return nil, err
 				}
-				reqVpcMember, err := http.NewRequest("DELETE", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s/members", c.HostURL, vpcsByNumber[v].ID), strings.NewReader(string(rb)))
+				reqVpcMember, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("%s/backend/com.newvm.network/v1/vxlan/%s/members", c.HostURL, vpcsByNumber[v].ID), strings.NewReader(string(rb)))
 				if err != nil {
 					return nil, err
 				}
@@ -705,15 +712,14 @@ func (c *Client) UpdateVm(orderID string, vmOld *Vm, vmNew Vm) (*Vm, error) {
 	// @todo
 	// hostname
 	// OS
-	// SSH keys
 
 	return &vmOrder, nil
 }
 
 // DeleteVm - Deletes a VM
-func (c *Client) DeleteVm(orderID string) error {
+func (c *Client) DeleteVm(ctx context.Context, orderID int64) error {
 	// obtain VM uuid
-	reqOrder, err := http.NewRequest("GET", fmt.Sprintf("%s/account/v1/order/%s", c.HostURL, orderID), nil)
+	reqOrder, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/account/v1/order/%d", c.HostURL, orderID), nil)
 	if err != nil {
 		return err
 	}
@@ -731,7 +737,7 @@ func (c *Client) DeleteVm(orderID string) error {
 
 	if orderData.Order.ProvisioningData.VmUuid != "" {
 		// get current state of VM
-		reqState, err := http.NewRequest("GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vm/%s", c.HostURL, orderData.Order.ProvisioningData.VmUuid), nil)
+		reqState, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/backend/com.newvm.network/v1/vm2?ids=%s", c.HostURL, orderData.Order.ProvisioningData.VmUuid), nil)
 		if err != nil {
 			return err
 		}
@@ -745,11 +751,11 @@ func (c *Client) DeleteVm(orderID string) error {
 			return err
 		}
 
-		if stateData.Vm.Status == "STOPPED" {
-			log.Printf("VM %s state is already 'STOPPED'", orderID)
+		if stateData.Vm.Status == "off" {
+			log.Printf("VM %d state is already 'off'", orderID)
 		} else {
 			// turn off VM if not off already
-			reqTurnOff, err := http.NewRequest("PATCH", fmt.Sprintf("%s/backend/com.newvm.network/v1/vm2/%s/changeState/off", c.HostURL, orderData.Order.ProvisioningData.VmUuid), nil)
+			reqTurnOff, err := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/backend/com.newvm.network/v1/vm2/%s/changeState/off", c.HostURL, orderData.Order.ProvisioningData.VmUuid), nil)
 			if err != nil {
 				return err
 			}
@@ -757,7 +763,7 @@ func (c *Client) DeleteVm(orderID string) error {
 			if err != nil {
 				return err
 			}
-			log.Printf("Turned off VM %s", orderID)
+			log.Printf("Turned off VM %d", orderID)
 		}
 	}
 
@@ -782,7 +788,7 @@ func (c *Client) DeleteVm(orderID string) error {
 	if err != nil {
 		return err
 	}
-	reqOrderEnd, err := http.NewRequest("PUT", fmt.Sprintf("%s/account/v1/order/%s/enddate", c.HostURL, orderID), strings.NewReader(string(reqBodyOrderEnd)))
+	reqOrderEnd, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/account/v1/order/%d/enddate", c.HostURL, orderID), strings.NewReader(string(reqBodyOrderEnd)))
 	if err != nil {
 		return err
 	}
@@ -794,7 +800,7 @@ func (c *Client) DeleteVm(orderID string) error {
 	if strings.ReplaceAll(string(resBodyOrderEnd), " ", "") != "{\"success\":true}" {
 		return errors.New(string(resBodyOrderEnd))
 	}
-	log.Printf("Set end date for order %s", orderID)
+	log.Printf("Set end date for order %d", orderID)
 
 	// @todo also delete sub orders
 	// @todo also delete sub orders

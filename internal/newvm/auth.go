@@ -1,6 +1,7 @@
 package newvm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,7 @@ import (
 )
 
 // Login - Get a new token for user
-func (c *Client) Login() (*AuthResponse, error) {
+func (c *Client) Login(ctx context.Context) (*AuthResponse, error) {
 	if c.Auth.Username == "" || c.Auth.Password == "" {
 		return nil, fmt.Errorf("define username and password")
 	}
@@ -18,7 +19,7 @@ func (c *Client) Login() (*AuthResponse, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/identity/v1", c.HostURL), strings.NewReader(string(rb)))
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/identity/v1", c.HostURL), strings.NewReader(string(rb)))
 	if err != nil {
 		return nil, err
 	}
@@ -38,8 +39,8 @@ func (c *Client) Login() (*AuthResponse, error) {
 }
 
 // Logout - Revoke the token for a user
-func (c *Client) Logout() error {
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/identity/v1", c.HostURL), strings.NewReader(string("")))
+func (c *Client) Logout(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("%s/identity/v1", c.HostURL), strings.NewReader(string("")))
 	if err != nil {
 		return err
 	}
