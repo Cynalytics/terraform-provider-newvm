@@ -66,6 +66,12 @@ type vmResource struct {
 
 type productPrefixReplaceModifier struct{}
 
+// the data to wait for after provisioning
+type vmProvisioningWait struct {
+	UUID bool
+	IP   bool
+}
+
 // Metadata returns the resource type name.
 func (r *vmResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_vm"
@@ -159,7 +165,6 @@ func (r *vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *r
 			"ssh_key": schema.StringAttribute{
 				Description: "SSH key to use for administrator account during initial provisioning only.",
 				Optional:    true,
-				WriteOnly:   true,
 			},
 			"is_vpc_only": schema.BoolAttribute{
 				Description: "Indicates if VM is only connected to a VPC.",
@@ -300,8 +305,6 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 
 	plan.OrderID = types.Int64Value(int64(vm.OrderID))
-	plan.Name = types.StringValue(fmt.Sprintf("VM%05d", int64(vm.OrderID)))
-	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
 	metadataItems, d := expandOrderMetadata(ctx, plan.Metadata, int(vm.OrderID))
 	resp.Diagnostics.Append(d...)
@@ -321,21 +324,27 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		!plan.IpAddress.IsNull() && !plan.IpAddress.IsUnknown() &&
 		plan.IpAddress.ValueString() != ""
 
-	if !userSetStatic {
-		if ip, err := r.WaitForIP(ctx, plan.OrderID.ValueInt64()); err == nil && ip != "" {
-			plan.IpAddress = types.StringValue(ip)
-		} else {
-			plan.IpAddress = types.StringNull()
-			if err != nil {
-				resp.Diagnostics.AddWarning(
-					"IP not yet assigned",
-					"The VM was created but no IP was visible before timeout; it will appear on the next refresh.",
-				)
-			}
-		}
+	provisionedVm, err := r.WaitForProvisioning(ctx, plan.OrderID.ValueInt64(), vmProvisioningWait{
+		UUID: true,
+		IP:   !userSetStatic,
+	})
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error waiting for VM provisioning",
+			"VM order was created, but provisioning data was not ready in time: "+err.Error(),
+		)
+		return
 	}
 
-	plan.SshKey = types.StringNull()
+	plan.ID = types.StringValue(provisionedVm.ID)
+	plan.Name = types.StringValue(provisionedVm.VmName)
+
+	if !userSetStatic {
+		plan.IpAddress = types.StringValue(provisionedVm.IpAddress)
+		plan.Gateway = types.StringValue(provisionedVm.Gateway)
+		plan.DnsServer = types.StringValue(provisionedVm.DnsServer)
+		plan.SubnetMask = types.StringValue(provisionedVm.SubnetMask)
+	}
 
 	// read back the meta data
 	metaItems, err := r.client.GetOrderMetaData(ctx, int64(vm.OrderID))
@@ -376,8 +385,6 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		return
 	}
 
-	log.Println("Reading VM:", vmOrderID)
-
 	vm, err := r.client.GetVm(ctx, vmOrderID)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -392,6 +399,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	log.Printf("VM: %v", vm)
 
 	state.ID = types.StringValue(vm.ID)
 	state.OrderID = types.Int64Value(int64(vm.OrderID))
@@ -399,7 +407,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	state.VmProductID = types.StringValue(vm.VmProductID)
 	state.Os = types.StringValue(vm.Os)
 	state.Location = types.StringValue(vm.Location)
-	state.Hostname = types.StringValue(vm.Hostname)
+	// state.Hostname = types.StringValue(vm.Hostname)
 	state.Ram = types.Int64Value(vm.Ram)
 	state.Cores = types.Int64Value(int64(vm.Cores))
 	state.Disk = types.Int64Value(vm.HdSize)
@@ -410,9 +418,9 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 	state.SubnetMask = types.StringValue(vm.SubnetMask)
 	state.IsVpcOnly = types.BoolValue(vm.IsVpcOnly)
 	state.UseDhcp = types.BoolValue(vm.UseDhcp)
-	state.RegisterDns = types.BoolValue(vm.RegisterDns)
+	// state.RegisterDns = types.BoolValue(vm.RegisterDns)
 
-	state.SshKey = types.StringNull()
+	// state.SshKey = types.StringNull()
 
 	metaItems, err := r.client.GetOrderMetaData(ctx, vmOrderID)
 	if err != nil {
@@ -465,15 +473,15 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	vmUpdated := newvm.Vm{
 		VmProductID: plan.VmProductID.ValueString(),
 		Os:          plan.Os.ValueString(),
-		Hostname:    plan.Hostname.ValueString(),
-		Location:    plan.Location.ValueString(),
-		Ram:         plan.Ram.ValueInt64(),
-		Cores:       int(plan.Cores.ValueInt64()),
-		HdSize:      plan.Disk.ValueInt64(),
-		IsVpcOnly:   plan.IsVpcOnly.ValueBool(),
-		UseDhcp:     plan.UseDhcp.ValueBool(),
-		RegisterDns: plan.RegisterDns.ValueBool(),
-		Vpc:         vpcIDs,
+		// Hostname:    plan.Hostname.ValueString(),
+		Location:  plan.Location.ValueString(),
+		Ram:       plan.Ram.ValueInt64(),
+		Cores:     int(plan.Cores.ValueInt64()),
+		HdSize:    plan.Disk.ValueInt64(),
+		IsVpcOnly: plan.IsVpcOnly.ValueBool(),
+		UseDhcp:   plan.UseDhcp.ValueBool(),
+		// RegisterDns: plan.RegisterDns.ValueBool(),
+		Vpc: vpcIDs,
 	}
 
 	if plan.IsVpcOnly.ValueBool() && !plan.UseDhcp.ValueBool() {
@@ -547,7 +555,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	plan.VmProductID = types.StringValue(vmNew.VmProductID)
 	plan.Os = types.StringValue(vmNew.Os)
 	plan.Location = types.StringValue(vmNew.Location)
-	plan.Hostname = types.StringValue(vmNew.Hostname)
+	// plan.Hostname = types.StringValue(vmNew.Hostname)
 	plan.Ram = types.Int64Value(vmNew.Ram)
 	plan.Cores = types.Int64Value(int64(vmNew.Cores))
 	plan.Disk = types.Int64Value(vmNew.HdSize)
@@ -558,10 +566,10 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	plan.SubnetMask = types.StringValue(vmNew.SubnetMask)
 	plan.IsVpcOnly = types.BoolValue(vmNew.IsVpcOnly)
 	plan.UseDhcp = types.BoolValue(vmNew.UseDhcp)
-	plan.RegisterDns = types.BoolValue(vmNew.RegisterDns)
+	// plan.RegisterDns = types.BoolValue(vmNew.RegisterDns)
 	// plan.LastUpdated = types.StringValue(time.Now().Format(time.RFC850))
 
-	plan.SshKey = types.StringNull()
+	// plan.SshKey = types.StringNull()
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 	if resp.Diagnostics.HasError() {
@@ -650,20 +658,31 @@ func (m productPrefixReplaceModifier) PlanModifyString(
 	}
 }
 
-func (r *vmResource) WaitForIP(ctx context.Context, id int64) (string, error) {
+func (r *vmResource) WaitForProvisioning(ctx context.Context, orderID int64, wait vmProvisioningWait) (*newvm.Vm, error) {
 	backoff := 300 * time.Millisecond
 	maxBackoff := 5 * time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
 
-		vm, err := r.client.GetVm(ctx, id)
-		if err == nil && vm.IpAddress != "" {
-			return vm.IpAddress, nil
+		vm, err := r.client.GetVm(ctx, orderID)
+		if err == nil && vm != nil {
+			ready := true
+
+			if wait.UUID && vm.ID == "" {
+				ready = false
+			}
+			if wait.IP && vm.IpAddress == "" {
+				ready = false
+			}
+
+			if ready {
+				return vm, nil
+			}
 		}
 
 		time.Sleep(backoff)

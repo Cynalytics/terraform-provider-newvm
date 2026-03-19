@@ -229,5 +229,6 @@ func (p *newvmProvider) Resources(_ context.Context) []func() resource.Resource 
 		NewControlPanelResource,
 		NewVmResource,
 		NewVpcResource,
+		NewDnsRecordResource,
 	}
 }

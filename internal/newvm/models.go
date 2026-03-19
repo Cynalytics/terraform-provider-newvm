@@ -263,3 +263,90 @@ type VpcMember struct {
 	MacAddress string `json:"macaddress"`
 	OrderID    int    `json:"orderid,omitempty"`
 }
+
+// DNS zone
+type ZoneWrapper struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Zone    Zone   `json:"zone"`
+}
+
+type Zone struct {
+	OwnerID  int         `json:"ownerid"`
+	Name     string      `json:"name"`
+	IsDomain bool        `json:"isdomain"`
+	Dnssec   bool        `json:"dnssec"`
+	Serial   int64       `json:"serial"`
+	Type     string      `json:"type"`
+	Records  []DnsRecord `json:"records"`
+}
+
+// DNS record
+type DnsRecord struct {
+	Zone    string `json:"zone"`
+	Type    string `json:"type"`
+	TTL     int64  `json:"ttl"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	Hash    string `json:"hash"`
+	Value   string `json:"value,omitempty"`
+
+	MName   string `json:"mname,omitempty"`
+	RName   string `json:"rname,omitempty"`
+	Refresh int64  `json:"refresh,omitempty"`
+	Retry   int64  `json:"retry,omitempty"`
+	Expire  int64  `json:"expire,omitempty"`
+	Minimum int64  `json:"minimum,omitempty"`
+
+	Flag int64  `json:"flag,omitempty"`
+	Tag  string `json:"tag,omitempty"`
+
+	Priority int64  `json:"priority,omitempty"`
+	Weight   int64  `json:"weight,omitempty"`
+	Port     int64  `json:"port,omitempty"`
+	Target   string `json:"target,omitempty"`
+}
+
+// DNS record create request
+type DnsRecordCreateRequest struct {
+	ClientID int    `json:"clientId"`
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	TTL      int64  `json:"ttl,omitempty"`
+	Value    string `json:"value,omitempty"`
+
+	Flag *int64 `json:"flag,omitempty"`
+	Tag  string `json:"tag,omitempty"`
+
+	Priority *int64 `json:"priority,omitempty"`
+	Weight   *int64 `json:"weight,omitempty"`
+	Port     *int64 `json:"port,omitempty"`
+	Target   string `json:"target,omitempty"`
+}
+
+// DNS record update request
+type DnsRecordUpdateRequest struct {
+	Hash  string `json:"hash"`
+	Name  string `json:"name,omitempty"`
+	TTL   int64  `json:"ttl,omitempty"`
+	Value string `json:"value,omitempty"`
+
+	Flag *int64 `json:"flag,omitempty"`
+	Tag  string `json:"tag,omitempty"`
+
+	Priority *int64 `json:"priority,omitempty"`
+	Weight   *int64 `json:"weight,omitempty"`
+	Port     *int64 `json:"port,omitempty"`
+	Target   string `json:"target,omitempty"`
+}
+
+// DNS record delete request
+type DnsRecordDeleteRequest struct {
+	Hash string `json:"hash"`
+}
+
+// DNS record create/update/delete response
+type DnsRecordMutationResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
