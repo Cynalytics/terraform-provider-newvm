@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -151,6 +152,21 @@ func DnsRecordMatches(record DnsRecord, want DnsRecord) bool {
 			return false
 		}
 
+	case "PTR":
+		recordValue := record.Content
+		if recordValue == "" {
+			recordValue = record.Value
+		}
+
+		wantValue := want.Content
+		if wantValue == "" {
+			wantValue = want.Value
+		}
+
+		if normalizeDnsValue(recordValue) != normalizeDnsValue(wantValue) {
+			return false
+		}
+
 	default:
 		if normalizeDnsValue(record.Content) != normalizeDnsValue(want.Content) {
 			return false
@@ -196,9 +212,110 @@ func normalizeDnsValue(value string) string {
 
 func NormalizeDnsRecordValue(recordType, value string) string {
 	switch strings.ToUpper(strings.TrimSpace(recordType)) {
-	case "TXT", "CNAME", "CAA", "A", "AAAA":
+	case "A", "AAAA", "CAA", "CNAME", "PTR", "TXT":
 		return normalizeDnsValue(value)
 	default:
 		return strings.TrimSpace(value)
 	}
+}
+
+func NormalizeDnsRecordName(zone, name string) string {
+	name = strings.TrimSpace(strings.TrimSuffix(name, "."))
+	zone = strings.TrimSpace(strings.TrimSuffix(zone, "."))
+
+	if name == zone {
+		return ""
+	}
+
+	suffix := "." + zone
+	if strings.HasSuffix(name, suffix) {
+		return strings.TrimSuffix(name, suffix)
+	}
+
+	return name
+}
+
+func NormalizeDnsRecordZoneAndName(recordType, zone, name string) (string, string, error) {
+	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+
+	if recordType != "PTR" {
+		return NormalizeDnsRecordName(zone, name), zone, nil
+	}
+
+	ip := net.ParseIP(strings.TrimSpace(zone))
+	if ip == nil {
+		// Already a reverse DNS zone.
+		return strings.TrimSpace(name), strings.TrimSpace(zone), nil
+	}
+
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return fmt.Sprintf("%d", ipv4[3]),
+			fmt.Sprintf("%d.%d.%d.in-addr.arpa", ipv4[2], ipv4[1], ipv4[0]),
+			nil
+	}
+
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return "", "", fmt.Errorf("invalid IPv6 address %q", zone)
+	}
+
+	hex := fmt.Sprintf("%032x", ip16)
+
+	nibbles := make([]string, 0, 32)
+	for i := len(hex) - 1; i >= 0; i-- {
+		nibbles = append(nibbles, string(hex[i]))
+	}
+
+	// Default to /64 reverse zone: first 16 reversed nibbles become the record name,
+	// remaining 16 reversed nibbles become the ip6.arpa zone.
+	recordName := strings.Join(nibbles[:16], ".")
+	reverseZone := strings.Join(nibbles[16:], ".") + ".ip6.arpa"
+
+	return recordName, reverseZone, nil
+}
+
+func (c *Client) UpdateAddressPtr(ctx context.Context, ipAddress string, fqdn *string) (*AddressPtrResponse, error) {
+	payload := AddressPtrRequest{}
+
+	if fqdn != nil && strings.TrimSpace(*fqdn) != "" {
+		normalized := strings.TrimSpace(strings.TrimSuffix(*fqdn, "."))
+		payload.RDNS = &normalized
+		payload.Description = normalized
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPatch,
+		fmt.Sprintf("%s/backend/com.newvm.network/v1/address/%s/dns/ptr", c.HostURL, url.PathEscape(ipAddress)),
+		bytes.NewReader(raw),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AddressPtrResponse
+	if len(body) == 0 {
+		response.Success = true
+		return &response, nil
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+
+	if !response.Success {
+		return nil, fmt.Errorf("API returned success=false while updating PTR for %q", ipAddress)
+	}
+
+	return &response, nil
 }

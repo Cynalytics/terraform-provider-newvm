@@ -85,7 +85,7 @@ func (r *dnsRecordResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			},
 			"type": schema.StringAttribute{
 				Required:    true,
-				Description: "DNS record type. Supported: A, AAAA, CAA, CNAME, TXT.",
+				Description: "DNS record type. Supported: A, AAAA, CAA, CNAME, PTR and TXT.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -155,7 +155,47 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	beforeZone, err := r.client.GetZone(ctx, plan.Zone.ValueString())
+	recordType := strings.ToUpper(plan.Type.ValueString())
+
+	if recordType == "PTR" {
+		value := newvm.NormalizeDnsRecordValue(recordType, plan.Value.ValueString())
+
+		if _, err := r.client.UpdateAddressPtr(ctx, plan.Zone.ValueString(), &value); err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to update PTR record",
+				err.Error(),
+			)
+			return
+		}
+
+		plan.Type = types.StringValue(recordType)
+		plan.Value = types.StringValue(value)
+		plan.Hash = types.StringValue(plan.Zone.ValueString())
+		plan.Name = types.StringValue("")
+		plan.Flag = types.Int64Value(0)
+		plan.Tag = types.StringValue("")
+		plan.Priority = types.Int64Value(0)
+		plan.Weight = types.Int64Value(0)
+		plan.Port = types.Int64Value(0)
+		plan.Target = types.StringValue("")
+
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		return
+	}
+
+	normalizedValue := newvm.NormalizeDnsRecordValue(recordType, plan.Value.ValueString())
+	normalizedTarget := newvm.NormalizeDnsRecordValue(recordType, plan.Target.ValueString())
+	normalizedName, normalizedZone, err := newvm.NormalizeDnsRecordZoneAndName(
+		recordType,
+		plan.Zone.ValueString(),
+		plan.Name.ValueString(),
+	)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid DNS record zone/name", err.Error())
+		return
+	}
+
+	beforeZone, err := r.client.GetZone(ctx, normalizedZone)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to read DNS zone",
@@ -169,14 +209,10 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		existingHashes[record.Hash] = struct{}{}
 	}
 
-	recordType := strings.ToUpper(plan.Type.ValueString())
-	normalizedValue := newvm.NormalizeDnsRecordValue(recordType, plan.Value.ValueString())
-	normalizedTarget := newvm.NormalizeDnsRecordValue(recordType, plan.Target.ValueString())
-
 	createReq := newvm.DnsRecordCreateRequest{
 		ClientID: beforeZone.Zone.OwnerID,
 		Type:     recordType,
-		Name:     plan.Name.ValueString(),
+		Name:     normalizedName,
 		TTL:      plan.TTL.ValueInt64(),
 		Value:    normalizedValue,
 		Tag:      plan.Tag.ValueString(),
@@ -200,7 +236,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		createReq.Port = &port
 	}
 
-	if _, err := r.client.CreateDnsRecord(ctx, plan.Zone.ValueString(), createReq); err != nil {
+	if _, err := r.client.CreateDnsRecord(ctx, normalizedZone, createReq); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to create DNS record",
 			err.Error(),
@@ -208,7 +244,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	readBack, err := r.client.GetZone(ctx, plan.Zone.ValueString())
+	readBack, err := r.client.GetZone(ctx, normalizedZone)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"DNS record created but could not re-read zone",
@@ -219,7 +255,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 
 	want := newvm.DnsRecord{
 		Type:     recordType,
-		Name:     plan.Name.ValueString(),
+		Name:     normalizedName,
 		TTL:      plan.TTL.ValueInt64(),
 		Content:  normalizedValue,
 		Value:    normalizedValue,
@@ -257,7 +293,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	r.apiRecordToState(plan.Zone.ValueString(), record, &plan)
+	r.apiRecordToState(normalizedZone, record, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -266,6 +302,55 @@ func (r *dnsRecordResource) Read(ctx context.Context, req resource.ReadRequest, 
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if strings.EqualFold(state.Type.ValueString(), "PTR") {
+		recordName, reverseZone, err := newvm.NormalizeDnsRecordZoneAndName(
+			"PTR",
+			state.Zone.ValueString(),
+			state.Name.ValueString(),
+		)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid PTR zone/name", err.Error())
+			return
+		}
+
+		zone, err := r.client.GetZone(ctx, reverseZone)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to read reverse DNS zone",
+				err.Error(),
+			)
+			return
+		}
+
+		want := newvm.DnsRecord{
+			Type:    "PTR",
+			Name:    recordName,
+			TTL:     state.TTL.ValueInt64(),
+			Content: newvm.NormalizeDnsRecordValue("PTR", state.Value.ValueString()),
+			Value:   newvm.NormalizeDnsRecordValue("PTR", state.Value.ValueString()),
+		}
+
+		record := newvm.FindDnsRecord(zone.Zone.Records, want)
+		if record == nil {
+			resp.State.RemoveResource(ctx)
+			return
+		}
+
+		state.Type = types.StringValue("PTR")
+		state.Hash = types.StringValue(record.Hash)
+		state.Name = types.StringValue("")
+		state.Value = types.StringValue(newvm.NormalizeDnsRecordValue("PTR", record.Content))
+		state.Flag = types.Int64Value(0)
+		state.Tag = types.StringValue("")
+		state.Priority = types.Int64Value(0)
+		state.Weight = types.Int64Value(0)
+		state.Port = types.Int64Value(0)
+		state.Target = types.StringValue("")
+
+		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 		return
 	}
 
@@ -304,12 +389,48 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 
 	recordType := strings.ToUpper(plan.Type.ValueString())
+
+	if recordType == "PTR" {
+		value := newvm.NormalizeDnsRecordValue(recordType, plan.Value.ValueString())
+
+		if _, err := r.client.UpdateAddressPtr(ctx, plan.Zone.ValueString(), &value); err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to update PTR record",
+				err.Error(),
+			)
+			return
+		}
+
+		plan.Type = types.StringValue(recordType)
+		plan.Value = types.StringValue(value)
+		plan.Hash = types.StringValue(plan.Zone.ValueString())
+		plan.Name = types.StringValue("")
+		plan.Flag = types.Int64Value(0)
+		plan.Tag = types.StringValue("")
+		plan.Priority = types.Int64Value(0)
+		plan.Weight = types.Int64Value(0)
+		plan.Port = types.Int64Value(0)
+		plan.Target = types.StringValue("")
+
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		return
+	}
+
 	normalizedValue := newvm.NormalizeDnsRecordValue(recordType, plan.Value.ValueString())
 	normalizedTarget := newvm.NormalizeDnsRecordValue(recordType, plan.Target.ValueString())
+	normalizedName, normalizedZone, err := newvm.NormalizeDnsRecordZoneAndName(
+		recordType,
+		plan.Zone.ValueString(),
+		plan.Name.ValueString(),
+	)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid DNS record zone/name", err.Error())
+		return
+	}
 
 	updateReq := newvm.DnsRecordUpdateRequest{
 		Hash:   state.Hash.ValueString(),
-		Name:   plan.Name.ValueString(),
+		Name:   normalizedName,
 		TTL:    plan.TTL.ValueInt64(),
 		Value:  normalizedValue,
 		Tag:    plan.Tag.ValueString(),
@@ -333,7 +454,7 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		updateReq.Port = &port
 	}
 
-	if _, err := r.client.UpdateDnsRecord(ctx, plan.Zone.ValueString(), updateReq); err != nil {
+	if _, err := r.client.UpdateDnsRecord(ctx, normalizedZone, updateReq); err != nil {
 		resp.Diagnostics.AddError(
 			"Unable to update DNS record",
 			err.Error(),
@@ -341,7 +462,7 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	readBack, err := r.client.GetZone(ctx, plan.Zone.ValueString())
+	readBack, err := r.client.GetZone(ctx, normalizedZone)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"DNS record updated but could not re-read zone",
@@ -354,7 +475,7 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 	if record == nil {
 		want := newvm.DnsRecord{
 			Type:     recordType,
-			Name:     plan.Name.ValueString(),
+			Name:     normalizedName,
 			TTL:      plan.TTL.ValueInt64(),
 			Content:  normalizedValue,
 			Value:    normalizedValue,
@@ -377,7 +498,7 @@ func (r *dnsRecordResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	r.apiRecordToState(plan.Zone.ValueString(), record, &plan)
+	r.apiRecordToState(normalizedZone, record, &plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -386,6 +507,18 @@ func (r *dnsRecordResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if strings.EqualFold(state.Type.ValueString(), "PTR") {
+		if _, err := r.client.UpdateAddressPtr(ctx, state.Zone.ValueString(), nil); err != nil {
+			resp.Diagnostics.AddError(
+				"Unable to reset PTR record",
+				err.Error(),
+			)
+			return
+		}
+
 		return
 	}
 
@@ -416,13 +549,13 @@ func (r *dnsRecordResource) validateModel(model *dnsRecordResourceModel, diags *
 	recordType := strings.ToUpper(strings.TrimSpace(model.Type.ValueString()))
 
 	switch recordType {
-	case "A", "AAAA", "CAA", "CNAME", "TXT":
+	case "A", "AAAA", "CAA", "CNAME", "PTR", "TXT":
 		// ok
 	default:
 		diags.AddAttributeError(
 			path.Root("type"),
 			"Unsupported DNS record type",
-			`Supported types are: A, AAAA, CAA, CNAME and TXT.`,
+			`Supported types are: A, AAAA, CAA, CNAME, PTR and TXT.`,
 		)
 	}
 
@@ -471,13 +604,28 @@ func (r *dnsRecordResource) validateModel(model *dnsRecordResourceModel, diags *
 			`For CAA records, "tag" is required.`,
 		)
 	}
+
+	if recordType == "PTR" {
+		ip := net.ParseIP(strings.TrimSpace(model.Zone.ValueString()))
+		if ip == nil || ip.To4() == nil {
+			diags.AddAttributeError(
+				path.Root("zone"),
+				"Invalid IPv4 address for PTR",
+				`For type "PTR", zone must currently be an IPv4 address.`,
+			)
+		}
+	}
 }
 
 func (r *dnsRecordResource) apiRecordToState(zone string, record *newvm.DnsRecord, state *dnsRecordResourceModel) {
-	state.Zone = types.StringValue(zone)
+	if state.Zone.IsNull() || state.Zone.IsUnknown() {
+		state.Zone = types.StringValue(zone)
+	}
+	if state.Name.IsNull() || state.Name.IsUnknown() || state.Name.ValueString() == "" {
+		state.Name = types.StringValue(record.Name)
+	}
 	state.Hash = types.StringValue(record.Hash)
 	state.Type = types.StringValue(strings.ToUpper(record.Type))
-	state.Name = types.StringValue(record.Name)
 	state.TTL = types.Int64Value(record.TTL)
 
 	switch strings.ToUpper(strings.TrimSpace(record.Type)) {
