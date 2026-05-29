@@ -17,7 +17,7 @@ import (
 )
 
 type NewVmVmWrapper struct {
-	Vm Vm `json:"vm"`
+	Result []Vm `json:"result"`
 }
 
 // GetVms - Returns list of available VM products (no auth required)
@@ -745,15 +745,20 @@ func (c *Client) DeleteVm(ctx context.Context, orderID int64) error {
 		if err != nil {
 			return err
 		}
+
 		var stateData NewVmVmWrapper
 		err = json.Unmarshal(bodyState, &stateData)
 		if err != nil {
 			return err
 		}
+		if len(stateData.Result) == 0 {
+			return fmt.Errorf("no VM found in result")
+		}
 
-		if stateData.Vm.Status == "off" {
+		if stateData.Result[0].Status == "off" {
 			log.Printf("VM %d state is already 'off'", orderID)
 		} else {
+			log.Printf("Turning off VM %d (from '%s' state) ...", orderID, stateData.Result[0].Status)
 			// turn off VM if not off already
 			reqTurnOff, err := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/backend/com.newvm.network/v1/vm2/%s/changeState/off", c.HostURL, orderData.Order.ProvisioningData.VmUuid), nil)
 			if err != nil {
@@ -763,7 +768,7 @@ func (c *Client) DeleteVm(ctx context.Context, orderID int64) error {
 			if err != nil {
 				return err
 			}
-			log.Printf("Turned off VM %d", orderID)
+			log.Printf("... Ready, VM %d is now off", orderID)
 		}
 	}
 
@@ -772,7 +777,18 @@ func (c *Client) DeleteVm(ctx context.Context, orderID int64) error {
 		EndDate          string `json:"end_date"`
 		IncludeSubOrders bool   `json:"includeSubOrders,omitempty"`
 	}
-	endDate, err := time.Parse("2006-01-02T15:04:05.000Z07:00", orderData.Order.BilledUntil) // this is the format for RFC3339 including milliseconds
+
+	var endDate time.Time
+
+	if strings.TrimSpace(orderData.Order.BilledUntil) == "" {
+		endDate = time.Now()
+	} else {
+		endDate, err = time.Parse("2006-01-02T15:04:05.000Z07:00", orderData.Order.BilledUntil) // this is the format for RFC3339 including milliseconds
+		if err != nil {
+			return fmt.Errorf("failed to parse billed_until %q: %w", orderData.Order.BilledUntil, err)
+		}
+	}
+
 	if err != nil {
 		panic(err)
 	}
