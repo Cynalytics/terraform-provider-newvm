@@ -789,9 +789,6 @@ func (c *Client) DeleteVm(ctx context.Context, orderID int64) error {
 		}
 	}
 
-	if err != nil {
-		panic(err)
-	}
 	timezone, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
 		panic(err)

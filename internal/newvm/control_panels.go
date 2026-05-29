@@ -372,10 +372,18 @@ func (c *Client) DeleteControlPanel(ctx context.Context, orderID int64) error {
 		EndDate          string `json:"end_date"`
 		IncludeSubOrders bool   `json:"includeSubOrders,omitempty"`
 	}
-	endDate, err := time.Parse("2006-01-02T15:04:05.000Z07:00", orderData.Order.BilledUntil) // this is the format for RFC3339 including milliseconds
-	if err != nil {
-		panic(err)
+
+	var endDate time.Time
+
+	if strings.TrimSpace(orderData.Order.BilledUntil) == "" {
+		endDate = time.Now()
+	} else {
+		endDate, err = time.Parse("2006-01-02T15:04:05.000Z07:00", orderData.Order.BilledUntil) // this is the format for RFC3339 including milliseconds
+		if err != nil {
+			return fmt.Errorf("failed to parse billed_until %q: %w", orderData.Order.BilledUntil, err)
+		}
 	}
+
 	timezone, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
 		panic(err)
