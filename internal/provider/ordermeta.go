@@ -100,7 +100,12 @@ func flattenOrderMetadata(ctx context.Context, items []newvm.NewVmOrderMetaData)
 	var diags diag.Diagnostics
 
 	if len(items) == 0 {
-		return types.MapNull(types.ListType{ElemType: types.StringType}), diags
+		emptyMap, d := types.MapValue(
+			types.ListType{ElemType: types.StringType},
+			map[string]attr.Value{},
+		)
+		diags.Append(d...)
+		return emptyMap, diags
 	}
 
 	elements := make(map[string]attr.Value, len(items))
